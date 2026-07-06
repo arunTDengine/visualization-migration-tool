@@ -135,7 +135,7 @@ Each display in `scenarios/*.json` describes one PI Vision screen:
 }
 ```
 
-## Agentic workflow (for Cursor / MCP)
+## Agentic workflow (MCP)
 
 1. **Discover** — list IDMP elements + attributes (MCP or `/elements/search`)
 2. **Map** — PI tag list → element ID + attribute names
