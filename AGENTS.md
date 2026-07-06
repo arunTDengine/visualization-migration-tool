@@ -81,6 +81,9 @@ See `scenarios/examples/ops-overview/` and `harness/FOLDER_SPEC.md`.
 | `agentic_pi_migration/migrator.py` | Core migration engine |
 | `agentic_pi_migration/folder_intake.py` | Screenshot + tags folder → JSON |
 | `agentic_pi_migration/client.py` | IDMP REST client |
+| `agentic_pi_migration/web/server.py` | Web UI backend (FastAPI) |
+| `web/` | Web UI frontend wizard |
+| `run-ui.sh` | Start the web UI |
 | `scenarios/summit-creek-oil.json` | Reference 3-dashboard oil scenario |
 | `harness/AGENT_CONTEXT.md` | Extended agent reference |
 | `.cursor/skills/agentic-pi-migration/SKILL.md` | Cursor skill entry point |

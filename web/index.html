@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agentic PI Migration Upgrade</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-tag">TDengine IDMP</span>
+        <h1>Agentic PI Migration Upgrade</h1>
+        <p>Recreate PI Vision dashboards on IDMP via REST — no container access required</p>
+      </div>
+      <div class="stepper" id="stepper">
+        <div class="step active" data-step="1"><span>1</span> Connect</div>
+        <div class="step" data-step="2"><span>2</span> Source</div>
+        <div class="step" data-step="3"><span>3</span> Review</div>
+        <div class="step" data-step="4"><span>4</span> Migrate</div>
+      </div>
+    </header>
+
+    <main class="content">
+      <!-- Step 1: Connect -->
+      <section class="panel step-panel active" id="step-1">
+        <h2>Connect to IDMP</h2>
+        <p class="lead">Enter your running IDMP instance credentials. These are used locally and are not stored on disk unless you save a <code>.env</code> file.</p>
+
+        <form id="connect-form" class="form-grid">
+          <label>
+            IDMP URL
+            <input type="url" id="idmp-url" name="idmp_url" placeholder="http://localhost:7142" required>
+          </label>
+          <label>
+            Email
+            <input type="email" id="idmp-user" name="user" placeholder="you@company.com" required>
+          </label>
+          <label>
+            Password
+            <input type="password" id="idmp-password" name="password" required>
+          </label>
+          <label>
+            Element search keyword
+            <input type="text" id="keyword" name="keyword" value="SCE" placeholder="SCE">
+            <small>Used to verify assets exist (e.g. site code or equipment prefix)</small>
+          </label>
+        </form>
+
+        <div class="actions">
+          <button type="button" class="btn secondary" id="btn-test">Test connection</button>
+          <button type="button" class="btn primary" id="btn-step1-next" disabled>Continue</button>
+        </div>
+
+        <div id="validate-result" class="result-box hidden"></div>
+      </section>
+
+      <!-- Step 2: Source -->
+      <section class="panel step-panel" id="step-2">
+        <h2>Choose migration source</h2>
+        <p class="lead">Upload a zip of your customer folder, or start with a built-in example.</p>
+
+        <div class="source-cards">
+          <div class="source-card">
+            <h3>Upload customer folder</h3>
+            <p>Zip one subfolder per PI Vision display. Each folder needs <code>tags.csv</code> and optionally <code>screenshot.png</code> + <code>display.json</code>.</p>
+            <div class="dropzone" id="dropzone">
+              <input type="file" id="file-input" accept=".zip" hidden>
+              <div class="dropzone-inner">
+                <strong>Drop your .zip here</strong>
+                <span>or click to browse</span>
+              </div>
+            </div>
+            <pre class="folder-tree">customer-migration/
+  ops-overview/
+    screenshot.png
+    tags.csv
+    display.json
+  p101-pump/
+    tags.csv</pre>
+          </div>
+
+          <div class="source-card">
+            <h3>Use built-in example</h3>
+            <p>Try the Summit Creek oil scenario or the single-display folder example without preparing files.</p>
+            <div id="example-list" class="example-list"></div>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button type="button" class="btn secondary" id="btn-step2-back">Back</button>
+        </div>
+
+        <div id="ingest-status" class="status-line hidden"></div>
+      </section>
+
+      <!-- Step 3: Review -->
+      <section class="panel step-panel" id="step-3">
+        <h2>Review migration plan</h2>
+        <p class="lead">Confirm displays, panels, and tag mappings before running the migration.</p>
+
+        <div id="review-summary" class="review-summary"></div>
+
+        <div class="migrate-options">
+          <label class="checkbox">
+            <input type="checkbox" id="create-new">
+            Create new dashboards (ignore existing dashboard IDs in scenario)
+          </label>
+        </div>
+
+        <details class="type-map">
+          <summary>PI Vision to IDMP chart type map</summary>
+          <table id="type-map-table"><thead><tr><th>PI Vision</th><th>IDMP panel</th></tr></thead><tbody></tbody></table>
+        </details>
+
+        <div class="actions">
+          <button type="button" class="btn secondary" id="btn-step3-back">Back</button>
+          <button type="button" class="btn primary" id="btn-step3-next">Run migration</button>
+        </div>
+      </section>
+
+      <!-- Step 4: Migrate -->
+      <section class="panel step-panel" id="step-4">
+        <h2>Migration results</h2>
+        <p class="lead">Dashboards are created or updated on your IDMP instance via REST + AI panels.</p>
+
+        <div id="migrate-progress" class="progress hidden">
+          <div class="spinner"></div>
+          <span>Migrating dashboards — this may take a minute per display...</span>
+        </div>
+
+        <div id="migrate-results" class="results"></div>
+
+        <div class="actions">
+          <button type="button" class="btn secondary" id="btn-start-over">Start over</button>
+          <button type="button" class="btn primary hidden" id="btn-open-idmp">Open IDMP</button>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span>REST-only migration — no docker exec, no manual dashboard clicking</span>
+      <a href="https://github.com/arunTDengine/agentic-pi-migration-tool" target="_blank" rel="noopener">GitHub</a>
+    </footer>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

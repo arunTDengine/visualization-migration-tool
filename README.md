@@ -4,6 +4,28 @@
 
 No container shell access. No manual dashboard clicking. Point it at a running IDMP instance, provide a display spec (PI tags + panel types + layout), and the agent builds live dashboards via REST.
 
+## Web UI (easiest setup)
+
+Start the wizard in your browser — no CLI commands required:
+
+```bash
+git clone https://github.com/arunTDengine/agentic-pi-migration-tool.git
+cd agentic-pi-migration-tool
+cp .env.example .env    # optional: pre-fill IDMP_URL and IDMP_USER
+
+./run-ui.sh
+# Open http://127.0.0.1:8765
+```
+
+The UI walks through four steps:
+
+1. **Connect** — enter IDMP URL, email, and password; test connection
+2. **Source** — upload a `.zip` of your customer folder, or pick a built-in example
+3. **Review** — confirm displays, panels, and tag mappings
+4. **Migrate** — run the migration and open live dashboard links
+
+`run-ui.sh` creates a local `.venv` and installs dependencies automatically on first run.
+
 ## Agent harness
 
 AI agents (Cursor, CI, MCP) should read **[AGENTS.md](AGENTS.md)** first.
@@ -55,40 +77,127 @@ PI Vision display inventory          IDMP asset model (elements + attributes)
 
 **Prerequisite:** PI tags must map to IDMP element attributes (e.g. `SUMMIT_CREEK_ENERGY...P101.vibration_mm_s` → `SCE-AST-EFA-P101.vibration_mm_s`).
 
-## Customer folder submission (screenshots + tags)
+## Customer folder layout
 
-Customers can drop **PI Vision screenshots** and **tag files** in a folder — no JSON editing required.
+Each PI Vision display is one subfolder with `screenshot.png`, `tags.csv`, and optional `display.json`. Multiple PI tags in one CSV cell are separated with `|` (pipe).
+
+Full folder spec: [harness/FOLDER_SPEC.md](harness/FOLDER_SPEC.md). Sample folder: [scenarios/examples/ops-overview/](scenarios/examples/ops-overview/).
+
+## Customer upgrade example
+
+This walkthrough shows how an operations team migrates PI Vision displays to TDengine IDMP without rebuilding dashboards by hand.
+
+### Situation
+
+Summit Creek Energy runs PI Vision for three production displays:
+
+- **Eagle Ford Production Control Board** — fleet KPIs and production trends
+- **P-101 Mechanical Performance Monitor** — pump vibration, pressure, runtime
+- **SEP-101 Vessel Operations Display** — separator level, pressure, throughput
+
+They deploy TDengine IDMP on a parallel stack (`oilupstream-idmp` at `http://localhost:7142`). Historian tags already map to IDMP element attributes (for example, `SCE-AST-EFA-P101.vibration_mm_s`).
+
+### Step 1 — Prepare the migration folder
+
+For each PI Vision screen, create a subfolder with a screenshot and tag list:
 
 ```
-customer-migration/
+summit-creek-migration/
   ops-overview/
-    screenshot.png       ← PI Vision screen capture
-    tags.csv             ← required: panels + PI tags
-    display.json         ← optional: name, element_id, theme
+    screenshot.png          # PI Vision screen capture
+    tags.csv                # panels + PI tags (required)
+    display.json            # optional: name, element_id, theme
   p101-pump/
+    screenshot.png
+    tags.csv
+    display.json
+  sep101-vessel/
     screenshot.png
     tags.csv
     display.json
 ```
 
-**tags.csv columns:**
+Example `ops-overview/tags.csv`:
 
 ```csv
 panel_key,title,type,element_id,pi_tags,prompt
-trend,15-Min Production,trend,2023515258075392,oil_bpd|gas_mcfd,line chart oil and gas
+fleet_kpi,Fleet Production Summary,kpi,2023515258075392,total_oil_production_bpd|total_gas_production_mcfd,stat card oil bpd and gas mcfd
+reliability,Station Reliability Index,gauge,2023515258075392,asset_health_pct,gauge asset health 0-100
+allocation,Production Allocation by Station,pie,2023515258075392,total_oil_production_bpd,pie chart production by station
+trend,15-Minute Production Profile,trend,2023515258075392,total_oil_production_bpd|total_gas_production_mcfd,line chart oil and gas last 15 minutes
+kpi_snapshot,Fleet KPI Snapshot,bar-gauge,2023515258075392,total_oil_production_bpd|active_alarm_count|asset_health_pct,bar-gauge fleet KPIs
 ```
 
-Multiple PI tags in one cell: separate with `|` (pipe).
+Optional `ops-overview/display.json`:
+
+```json
+{
+  "name": "Eagle Ford Production Control Board",
+  "element_id": 2023515258075392,
+  "theme": "control-room"
+}
+```
+
+See `scenarios/examples/ops-overview/` for a working sample folder.
+
+### Step 2 — Install and configure the tool
 
 ```bash
-# Step 1: folder → scenario JSON
-./run.sh ingest-folder /path/to/customer-migration -o scenarios/generated.json
-
-# Step 2: scenario → live IDMP dashboards
-./run.sh migrate scenarios/generated.json
+git clone https://github.com/arunTDengine/agentic-pi-migration-tool.git
+cd agentic-pi-migration-tool
+cp .env.example .env
+# Edit .env: IDMP_URL, IDMP_USER, IDMP_PASSWORD
 ```
 
-Screenshots are saved as `reference_screenshot` in the scenario. An AI agent (Cursor) can open them to refine layout/titles before migrate. Example folder: `scenarios/examples/ops-overview/`.
+### Step 3 — Validate IDMP connectivity
+
+Confirm the IDMP instance is reachable and assets exist:
+
+```bash
+./run.sh validate --keyword SCE
+```
+
+This lists matching elements (station, pumps, separators) and confirms credentials work.
+
+### Step 4 — Convert folder to scenario JSON
+
+No login required for this step:
+
+```bash
+./run.sh ingest-folder ./summit-creek-migration -o scenarios/summit-creek-generated.json
+```
+
+The tool reads each subfolder, attaches screenshot paths as `reference_screenshot`, and builds a migration spec. An AI agent can open those screenshots to refine titles and layout before the next step.
+
+### Step 5 — Run the migration
+
+```bash
+./run.sh migrate scenarios/summit-creek-generated.json --report reports/summit-creek.json
+```
+
+The migrator logs in via REST, creates AI panels for each symbol, applies a 24-column grid layout, sets a 15-minute live window (`now-15m` to `now`), and publishes dashboards on the target elements.
+
+Or run the full pipeline in one command:
+
+```bash
+./harness/run-agent-workflow.sh full ./summit-creek-migration
+```
+
+### Step 6 — Verify in IDMP
+
+Open each dashboard in the IDMP UI and confirm:
+
+- Panels show live data (start the data simulator if charts are empty)
+- Titles and chart types match the PI Vision reference screenshots
+- Time range is the last 15 minutes with 15-second refresh
+
+### What the customer does not need to do
+
+- Shell into the IDMP container
+- Click through the dashboard builder panel by panel
+- Export PI Vision displays in a proprietary format (screenshots + tag CSV is enough)
+
+P&ID and process-graphics displays can be listed in `tags.csv` as type `process`; those map to `advanced` panels and typically need manual layout polish after migration.
 
 ## Quick start (Summit Creek oil)
 
@@ -145,8 +254,8 @@ Each display in `scenarios/*.json` describes one PI Vision screen:
 
 ## Limitations
 
-- **Chart displays** (trends, KPIs, gauges, bars): fully agentic ✅
-- **P&ID process graphics**: spec maps to `advanced`; needs human finish ⚠️
+- **Chart displays** (trends, KPIs, gauges, bars): fully automated via REST + AI
+- **P&ID process graphics**: spec maps to `advanced`; needs human finish
 - **PI Vision drag-and-drop export**: not native — you provide tag/layout spec or a CSV export converted to JSON
 
 ## Branding
