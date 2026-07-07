@@ -46,6 +46,8 @@ def parse_dashboard(data: dict[str, Any]) -> DashboardSpec:
         panels=panels,
         layout=layout,
         refresh_seconds=int(data.get("refresh_seconds", 15)),
+        time_from=data.get("time_from", "now-15m"),
+        time_to=data.get("time_to", "now"),
     )
 
 

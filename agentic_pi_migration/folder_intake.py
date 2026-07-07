@@ -144,6 +144,8 @@ def _load_display_folder(folder: Path) -> dict[str, Any]:
         "dashboard_id": int(meta["dashboard_id"]) if meta.get("dashboard_id") else None,
         "theme": theme,
         "refresh_seconds": int(meta.get("refresh_seconds", 15)),
+        "time_from": meta.get("time_from", "now-90d"),
+        "time_to": meta.get("time_to", "now"),
         "header_html": header,
         "panels": panels,
         "layout": meta.get("layout") or _auto_layout(panels),

@@ -84,6 +84,8 @@ class MigrateRequest(BaseModel):
     password: str
     create_new: bool = False
     workers: int = Field(default=3, ge=1, le=8)
+    prompt_context: str = ""
+    panel_prompts: dict[str, str] = Field(default_factory=dict)
 
 
 def _default_config() -> dict[str, str]:
@@ -136,6 +138,7 @@ def _scenario_summary(scenario: dict[str, Any]) -> dict[str, Any]:
                         "type": p.get("type"),
                         "element_id": p.get("element_id"),
                         "pi_tags": p.get("pi_tags", []),
+                        "prompt": p.get("prompt", ""),
                     }
                     for p in d.get("panels", [])
                 ],
@@ -289,8 +292,17 @@ def migrate(body: MigrateRequest) -> dict[str, Any]:
 
     try:
         client = IdmpClient(body.idmp_url, body.user, body.password)
-        migrator = AgenticPiMigrator(client, workers=body.workers)
+        migrator = AgenticPiMigrator(
+            client,
+            workers=body.workers,
+            prompt_context=body.prompt_context.strip(),
+        )
         dashboards = load_dashboards(scenario_path)
+        if body.panel_prompts:
+            for spec in dashboards:
+                for panel in spec.panels:
+                    if panel.key in body.panel_prompts:
+                        panel.prompt = body.panel_prompts[panel.key]
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -306,6 +318,8 @@ def migrate(body: MigrateRequest) -> dict[str, Any]:
 
     job["migration"] = {
         "completed_at": datetime.now(timezone.utc).isoformat(),
+        "prompt_context": body.prompt_context.strip(),
+        "panel_prompts": body.panel_prompts,
         "results": results,
         "errors": errors,
     }

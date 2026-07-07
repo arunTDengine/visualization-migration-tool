@@ -18,7 +18,8 @@
         <div class="step active" data-step="1"><span>1</span> Connect</div>
         <div class="step" data-step="2"><span>2</span> Source</div>
         <div class="step" data-step="3"><span>3</span> Review</div>
-        <div class="step" data-step="4"><span>4</span> Migrate</div>
+        <div class="step" data-step="4"><span>4</span> Context</div>
+        <div class="step" data-step="5"><span>5</span> Migrate</div>
       </div>
     </header>
 
@@ -116,12 +117,31 @@
 
         <div class="actions">
           <button type="button" class="btn secondary" id="btn-step3-back">Back</button>
-          <button type="button" class="btn primary" id="btn-step3-next">Run migration</button>
+          <button type="button" class="btn primary" id="btn-step3-next">Continue</button>
         </div>
       </section>
 
-      <!-- Step 4: Migrate -->
+      <!-- Step 4: Context -->
       <section class="panel step-panel" id="step-4">
+        <h2>Prompt context</h2>
+        <p class="lead">Add instructions for the AI panel generator. Global context applies to every panel; per-panel prompts refine individual charts.</p>
+
+        <label class="context-field">
+          Global migration context
+          <textarea id="prompt-context" rows="4" placeholder="e.g. Use control-room dark theme styling. Prefer stat cards for KPIs. Match PI Vision layout density. Avoid tables unless explicitly tagged as table."></textarea>
+          <small>Appended to every AI panel prompt during migration.</small>
+        </label>
+
+        <div id="panel-prompts" class="panel-prompts"></div>
+
+        <div class="actions">
+          <button type="button" class="btn secondary" id="btn-step4-back">Back</button>
+          <button type="button" class="btn primary" id="btn-step4-next">Run migration</button>
+        </div>
+      </section>
+
+      <!-- Step 5: Migrate -->
+      <section class="panel step-panel" id="step-5">
         <h2>Migration results</h2>
         <p class="lead">Dashboards are created or updated on your IDMP instance via REST + AI panels.</p>
 

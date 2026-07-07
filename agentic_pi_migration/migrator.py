@@ -71,6 +71,8 @@ class DashboardSpec:
     panels: list[PanelSpec]
     layout: list[LayoutCell]
     refresh_seconds: int = 15
+    time_from: str = "now-15m"
+    time_to: str = "now"
 
 
 THEMES: dict[str, dict[str, Any]] = {
@@ -104,9 +106,10 @@ THEMES: dict[str, dict[str, Any]] = {
 class AgenticPiMigrator:
     """Recreates PI Vision-style displays on IDMP via REST + AI panel generation."""
 
-    def __init__(self, client: IdmpClient, *, workers: int = 3) -> None:
+    def __init__(self, client: IdmpClient, *, workers: int = 3, prompt_context: str = "") -> None:
         self.client = client
         self.workers = workers
+        self.prompt_context = prompt_context.strip()
 
     @staticmethod
     def map_pi_type(pi_symbol: str) -> str:
@@ -121,14 +124,15 @@ class AgenticPiMigrator:
             f"Create ONLY a {idmp_type} chart — no table unless type is table. "
             f"Industrial SCADA / PI Vision migration quality. "
             f"Professional title: '{spec.title}'. {spec.prompt}.{tag_hint}"
+            + (f" Additional context: {self.prompt_context}." if self.prompt_context else "")
         )
 
-    def _create_text_panel(self, element_id: int, html: str) -> dict[str, Any]:
+    def _create_text_panel(self, element_id: int, html: str, *, name: str = "Display Banner") -> dict[str, Any]:
         return {
             "panelId": self.client.create_panel(
                 element_id,
                 {
-                    "name": "Display Banner",
+                    "name": name,
                     "panelType": "text",
                     "textContent": html,
                 },
@@ -138,20 +142,29 @@ class AgenticPiMigrator:
             "key": "header",
         }
 
-    def _create_chart_panel(self, spec: PanelSpec) -> dict[str, Any]:
+    def _create_chart_panel(
+        self,
+        spec: PanelSpec,
+        *,
+        dashboard_element_id: int,
+        time_from: str,
+        time_to: str,
+    ) -> dict[str, Any]:
         prompt = self._build_ai_prompt(spec)
         panel = self.client.ai_create_panel(spec.element_id, prompt)
         idmp_type = panel.get("panelType", self.map_pi_type(spec.panel_type))
 
         panel["name"] = spec.title
-        chart = panel.setdefault("chart", {})
-        graph = chart.setdefault("graph", {})
+        chart = panel.get("chart") or {}
+        graph = chart.get("graph") or {}
         graph["title"] = spec.title
         chart["graph"] = graph
+        panel["chart"] = chart
 
         panel_id = self.client.create_panel(spec.element_id, panel)
         saved = self.client.get_panel(spec.element_id, panel_id)
-        self._apply_live_window(saved, idmp_type)
+        self._apply_live_window(saved, idmp_type, time_from=time_from, time_to=time_to)
+        self._qualify_child_attributes(saved, spec.element_id, dashboard_element_id)
         self.client.update_panel(spec.element_id, panel_id, saved)
 
         return {
@@ -162,23 +175,57 @@ class AgenticPiMigrator:
             "title": spec.title,
         }
 
-    def _apply_live_window(self, panel: dict[str, Any], panel_type: str) -> None:
+    @staticmethod
+    def _qualify_child_attributes(
+        panel: dict[str, Any],
+        panel_element_id: int,
+        dashboard_element_id: int,
+    ) -> None:
+        """Prefix attribute paths when panels live on child elements.
+
+        Dashboard queries run against the dashboard root element. Child-element
+        panels must use ``{elementId}|attributes['...']`` so expressions resolve.
+        """
+        if panel_element_id == dashboard_element_id:
+            return
+        prefix = f"{panel_element_id}|"
+        for key in ("yaAttributes", "xaAttributes"):
+            for attr in panel.get(key) or []:
+                expr = attr.get("attributeExpression") or ""
+                if not expr or "|" in expr:
+                    continue
+                qualified = f"{prefix}{expr}"
+                attr["attributeExpression"] = qualified
+                if attr.get("expression"):
+                    attr["expression"] = attr["expression"].replace(expr, qualified)
+
+    def _apply_live_window(
+        self,
+        panel: dict[str, Any],
+        panel_type: str,
+        *,
+        time_from: str = "now-15m",
+        time_to: str = "now",
+    ) -> None:
         if panel_type == "text":
             return
         params = panel.setdefault("params", {})
-        params.update(DEFAULT_TIME)
+        params.update({"fromText": time_from, "toText": time_to})
 
-        chart = panel.setdefault("chart", {})
-        legend = chart.setdefault("legend", {})
+        chart = panel.get("chart") or {}
+        legend = chart.get("legend") or {}
         legend["show"] = True
         legend["placement"] = "bottom"
+        chart["legend"] = legend
 
-        series = chart.setdefault("series", {})
+        series = chart.get("series") or {}
         if panel_type == "stat":
             series["graphMode"] = "area"
             series["textMode"] = "value_and_name"
         elif panel_type == "line":
             series["graphMode"] = "area"
+        chart["series"] = series
+        panel["chart"] = chart
 
         if panel_type in ("line", "bar", "scatter", "state-history", "stat", "bar-gauge"):
             for key in ("yaAttributes", "xaAttributes"):
@@ -195,13 +242,22 @@ class AgenticPiMigrator:
         created: dict[str, dict[str, Any]] = {}
 
         created["header"] = {
-            **self._create_text_panel(spec.element_id, spec.header_html),
+            **self._create_text_panel(spec.element_id, spec.header_html, name=f"{spec.name} Banner"),
             "key": "header",
         }
 
         chart_specs = [p for p in spec.panels if p.panel_type != "text"]
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.workers) as pool:
-            futures = {pool.submit(self._create_chart_panel, p): p.key for p in chart_specs}
+            futures = {
+                pool.submit(
+                    self._create_chart_panel,
+                    p,
+                    dashboard_element_id=spec.element_id,
+                    time_from=spec.time_from,
+                    time_to=spec.time_to,
+                ): p.key
+                for p in chart_specs
+            }
             for future in concurrent.futures.as_completed(futures):
                 panel = future.result()
                 created[panel["key"]] = panel

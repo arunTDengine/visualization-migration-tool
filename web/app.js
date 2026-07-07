@@ -3,6 +3,8 @@ const state = {
   connected: false,
   jobId: null,
   summary: null,
+  promptContext: "",
+  panelPrompts: {},
 };
 
 const STORAGE_KEY = "agentic-pi-migration-config";
@@ -184,6 +186,48 @@ function totalPanels(summary) {
   return (summary.displays || []).reduce((n, d) => n + (d.panel_count || 0), 0);
 }
 
+function renderContextStep(summary) {
+  const root = $("panel-prompts");
+  root.innerHTML = "";
+
+  const hasPanels = (summary.displays || []).some((d) => (d.panels || []).length);
+  if (!hasPanels) {
+    root.innerHTML = "<p class='lead'>No panels to customize — global context above still applies.</p>";
+    return;
+  }
+
+  for (const d of summary.displays || []) {
+    const panels = d.panels || [];
+    if (!panels.length) continue;
+
+    const section = document.createElement("div");
+    section.className = "display-card";
+    section.innerHTML = `<h3>${escapeHtml(d.name)}</h3>`;
+    root.appendChild(section);
+
+    for (const p of panels) {
+      const field = document.createElement("label");
+      field.className = "context-field panel-prompt-field";
+      field.innerHTML = `
+        <span class="panel-prompt-label">${escapeHtml(p.title)} <code>${escapeHtml(p.type)}</code></span>
+        <textarea data-panel-key="${escapeHtml(p.key)}" rows="2" placeholder="Panel-specific AI prompt">${escapeHtml(state.panelPrompts[p.key] ?? p.prompt ?? "")}</textarea>
+      `;
+      section.appendChild(field);
+    }
+  }
+}
+
+function collectPanelPrompts() {
+  const prompts = {};
+  document.querySelectorAll("#panel-prompts textarea[data-panel-key]").forEach((el) => {
+    const key = el.dataset.panelKey;
+    const value = el.value.trim();
+    if (key && value) prompts[key] = value;
+  });
+  state.panelPrompts = prompts;
+  return prompts;
+}
+
 function renderReview(summary) {
   const root = $("review-summary");
   root.innerHTML = "";
@@ -255,6 +299,8 @@ async function runMigration() {
         password: creds.password,
         create_new: $("create-new").checked,
         workers: 3,
+        prompt_context: state.promptContext.trim(),
+        panel_prompts: state.panelPrompts,
       }),
     });
 
@@ -334,12 +380,22 @@ function bindEvents() {
   $("btn-step2-back").addEventListener("click", () => setStep(1));
   $("btn-step3-back").addEventListener("click", () => setStep(2));
   $("btn-step3-next").addEventListener("click", () => {
+    if (state.summary) renderContextStep(state.summary);
+    $("prompt-context").value = state.promptContext;
     setStep(4);
+  });
+  $("btn-step4-back").addEventListener("click", () => setStep(3));
+  $("btn-step4-next").addEventListener("click", () => {
+    state.promptContext = $("prompt-context").value;
+    collectPanelPrompts();
+    setStep(5);
     runMigration();
   });
   $("btn-start-over").addEventListener("click", () => {
     state.jobId = null;
     state.summary = null;
+    state.promptContext = "";
+    state.panelPrompts = {};
     $("ingest-status").classList.add("hidden");
     $("migrate-results").innerHTML = "";
     $("migrate-progress").classList.add("hidden");

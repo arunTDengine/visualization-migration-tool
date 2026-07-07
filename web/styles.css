@@ -153,18 +153,67 @@ label small {
 input[type="text"],
 input[type="url"],
 input[type="email"],
-input[type="password"] {
+input[type="password"],
+textarea {
   padding: 0.65rem 0.75rem;
   border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--surface-2);
   color: var(--text);
   font-size: 0.95rem;
+  font-family: inherit;
+  resize: vertical;
+}
+
+textarea {
+  min-height: 4.5rem;
+  line-height: 1.45;
 }
 
 input:focus {
   outline: 2px solid rgba(245, 158, 11, 0.45);
   border-color: var(--accent);
+}
+
+textarea:focus {
+  outline: 2px solid rgba(245, 158, 11, 0.45);
+  border-color: var(--accent);
+}
+
+.context-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  margin-bottom: 1rem;
+}
+
+.context-field small {
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.panel-prompts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.panel-prompt-field {
+  margin-top: 0.75rem;
+}
+
+.panel-prompt-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.panel-prompt-label code {
+  font-size: 0.78rem;
 }
 
 .actions {
