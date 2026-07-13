@@ -4,7 +4,7 @@
 
 No container shell access. No manual dashboard clicking. Point it at a running IDMP instance, provide a display spec (PI tags + panel types + layout), and the agent builds live dashboards via REST.
 
-## Web UI (easiest setup)
+## Migration Studio (easiest setup)
 
 Start the wizard in your browser — no CLI commands required:
 
@@ -13,18 +13,59 @@ git clone https://github.com/arunTDengine/agentic-pi-migration-tool.git
 cd agentic-pi-migration-tool
 cp .env.example .env    # optional: pre-fill IDMP_URL and IDMP_USER
 
-./run-ui.sh
+./run-ui.sh                     # macOS / Linux
+# .\run-ui.ps1                  # Windows PowerShell
 # Open http://127.0.0.1:8765
 ```
 
-The UI walks through four steps:
+The responsive browser UI walks through five guided steps:
 
-1. **Connect** — enter IDMP URL, email, and password; test connection
+1. **Connect** — auto-discover a local IDMP or enter its URL; use password or API-key auth
 2. **Source** — upload a `.zip` of your customer folder, or pick a built-in example
 3. **Review** — confirm displays, panels, and tag mappings
-4. **Migrate** — run the migration and open live dashboard links
+4. **Refine** — optionally guide panel and Canvas generation
+5. **Publish** — confirm the plan, migrate, and open live dashboard links
 
 `run-ui.sh` creates a local `.venv` and installs dependencies automatically on first run.
+
+### One-command Docker deployment
+
+Docker Desktop works the same way on Windows, macOS, and Linux:
+
+```bash
+docker compose up --build
+# Open http://localhost:8765
+```
+
+The Compose file persists uploads, includes a healthcheck, and maps
+`host.docker.internal` on Linux. If IDMP runs on the host, enter its normal
+browser URL such as `http://localhost:7142`; the container translates localhost
+internally. If IDMP is another Compose service, set:
+
+```env
+IDMP_URL=http://your-idmp-service:6042
+IDMP_PUBLIC_URL=http://localhost:7142
+```
+
+`IDMP_PUBLIC_URL` keeps generated dashboard links browser-accessible while the
+tool uses the private service URL for API calls.
+
+### Local IDMP compatibility
+
+Migration Studio accepts URLs with or without `http://` and with or without an
+`/api/v1` suffix. It probes current and legacy API roots, supports common token
+response formats, password or API-key auth, request timeouts, and automatic
+discovery across common local IDMP ports.
+
+This means locally deployed **TDengine IDMP** versions exposing element, panel,
+and dashboard REST APIs. It does not mean bare TDengine TSDB: port `xx41`
+provides the TSDB REST/SQL service, while this tool needs the IDMP web/API port,
+normally `xx42`.
+
+```bash
+./run.sh discover
+./run.sh validate --keyword SCE
+```
 
 ## Agent harness
 
@@ -54,6 +95,7 @@ PI Vision display inventory          IDMP asset model (elements + attributes)
               Agentic PI Migration Upgrade
                 • login via REST
                 • AI panel generation per symbol
+                • editable Canvas P&ID generation
                 • 15-minute live window + 30s resolution
                 • themed 24-column grid layout
                 • PUT dashboard (update or create)
@@ -73,7 +115,7 @@ PI Vision display inventory          IDMP asset model (elements + attributes)
 | Pie | `pie` |
 | XY Plot | `scatter` |
 | State / timeline | `state-history` |
-| P&ID / process graphic | `advanced` *(manual polish)* |
+| P&ID / process graphic | IDMP `CANVAS` (editable Meta2d P&ID) |
 
 **Prerequisite:** PI tags must map to IDMP element attributes (e.g. `SUMMIT_CREEK_ENERGY...P101.vibration_mm_s` → `SCE-AST-EFA-P101.vibration_mm_s`).
 
@@ -146,7 +188,7 @@ See `scenarios/examples/ops-overview/` for a working sample folder.
 git clone https://github.com/arunTDengine/agentic-pi-migration-tool.git
 cd agentic-pi-migration-tool
 cp .env.example .env
-# Edit .env: IDMP_URL, IDMP_USER, IDMP_PASSWORD
+# Edit .env: IDMP_URL plus IDMP_USER/IDMP_PASSWORD or IDMP_API_KEY
 ```
 
 ### Step 3 — Validate IDMP connectivity
@@ -197,7 +239,12 @@ Open each dashboard in the IDMP UI and confirm:
 - Click through the dashboard builder panel by panel
 - Export PI Vision displays in a proprietary format (screenshots + tag CSV is enough)
 
-P&ID and process-graphics displays can be listed in `tags.csv` as type `process`; those map to `advanced` panels and typically need manual layout polish after migration.
+P&ID and process-graphics displays can be listed in `tags.csv` as type
+`process`, `pid`, or `pnid`. They automatically publish as editable IDMP Canvas
+dashboards with animated flows, equipment symbols, live Formula values, and
+embedded trend/KPI panels. Add an equipment/flow plan—or raw Meta2d `pens`—to
+`display.json` for screenshot-level fidelity. The Canvas path uses REST only and
+does not modify source data.
 
 ## Quick start (Summit Creek oil)
 
@@ -255,8 +302,11 @@ Each display in `scenarios/*.json` describes one PI Vision screen:
 ## Limitations
 
 - **Chart displays** (trends, KPIs, gauges, bars): fully automated via REST + AI
-- **P&ID process graphics**: spec maps to `advanced`; needs human finish
+- **P&ID process graphics**: generated as editable IDMP Canvas dashboards; exact
+  screenshot matching still benefits from a supplied equipment/flow plan or raw Meta2d pens
 - **PI Vision drag-and-drop export**: not native — you provide tag/layout spec or a CSV export converted to JSON
+- **Compatibility boundary**: requires TDengine IDMP REST element/panel/dashboard
+  APIs; a standalone TDengine TSDB endpoint is not sufficient
 
 ## Branding
 

@@ -46,4 +46,9 @@ tags.csv: `panel_key,title,type,element_id,pi_tags,prompt` — pi_tags separated
 - REST API only — never docker exec into IDMP
 - Charts over tables for visual dashboards
 - 15-minute live window, 24-column aligned layout
-- P&ID graphics → `advanced` type, warn user manual polish needed
+- P&ID/process/pid/pnid → editable IDMP Canvas via REST; use equipment/flow
+  plans or raw Meta2d pens for screenshot-level fidelity
+- Prefer Migration Studio (`run-ui.sh`, `run-ui.ps1`, or `docker compose up
+  --build`) for human users; it auto-discovers local IDMP xx42 ports and supports
+  password or API-key authentication
+- IDMP REST is required; never point migration at bare TDengine TSDB xx41

@@ -7,163 +7,148 @@
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
-  <div class="app">
+  <div class="app-shell">
     <header class="topbar">
+      <div class="brand-mark" aria-hidden="true">PI</div>
       <div class="brand">
         <span class="brand-tag">TDengine IDMP</span>
-        <h1>Agentic PI Migration Upgrade</h1>
-        <p>Recreate PI Vision dashboards on IDMP via REST — no container access required</p>
+        <h1>Migration Studio</h1>
+        <p>Turn PI Vision displays into live dashboards and Canvas P&amp;IDs.</p>
       </div>
-      <div class="stepper" id="stepper">
-        <div class="step active" data-step="1"><span>1</span> Connect</div>
-        <div class="step" data-step="2"><span>2</span> Source</div>
-        <div class="step" data-step="3"><span>3</span> Review</div>
-        <div class="step" data-step="4"><span>4</span> Context</div>
-        <div class="step" data-step="5"><span>5</span> Migrate</div>
+      <div class="topbar-status">
+        <span class="status-dot"></span>
+        <span id="connection-label">Not connected</span>
       </div>
     </header>
 
-    <main class="content">
-      <!-- Step 1: Connect -->
-      <section class="panel step-panel active" id="step-1">
-        <h2>Connect to IDMP</h2>
-        <p class="lead">Enter your running IDMP instance credentials. These are used locally and are not stored on disk unless you save a <code>.env</code> file.</p>
-
-        <form id="connect-form" class="form-grid">
-          <label>
-            IDMP URL
-            <input type="url" id="idmp-url" name="idmp_url" placeholder="http://localhost:7142" required>
-          </label>
-          <label>
-            Email
-            <input type="email" id="idmp-user" name="user" placeholder="you@company.com" required>
-          </label>
-          <label>
-            Password
-            <input type="password" id="idmp-password" name="password" required>
-          </label>
-          <label>
-            Element search keyword
-            <input type="text" id="keyword" name="keyword" value="SCE" placeholder="SCE">
-            <small>Used to verify assets exist (e.g. site code or equipment prefix)</small>
-          </label>
-        </form>
-
-        <div class="actions">
-          <button type="button" class="btn secondary" id="btn-test">Test connection</button>
-          <button type="button" class="btn primary" id="btn-step1-next" disabled>Continue</button>
+    <div class="wizard-layout">
+      <aside class="step-rail">
+        <nav aria-label="Migration progress">
+          <ol class="stepper" id="stepper">
+            <li><button type="button" class="step active" data-step="1"><span>1</span><b>Connect</b><small>Find your IDMP</small></button></li>
+            <li><button type="button" class="step" data-step="2"><span>2</span><b>Source</b><small>Add displays</small></button></li>
+            <li><button type="button" class="step" data-step="3"><span>3</span><b>Review</b><small>Check mappings</small></button></li>
+            <li><button type="button" class="step" data-step="4"><span>4</span><b>Refine</b><small>Guide the agent</small></button></li>
+            <li><button type="button" class="step" data-step="5"><span>5</span><b>Publish</b><small>Create in IDMP</small></button></li>
+          </ol>
+        </nav>
+        <div id="job-badge" class="job-badge hidden" aria-live="polite"></div>
+        <div class="rail-note">
+          <strong>REST only</strong>
+          <span>No container shell access. Source historian data is never changed.</span>
         </div>
+      </aside>
 
-        <div id="validate-result" class="result-box hidden"></div>
-      </section>
+      <main class="content">
+        <section class="panel step-panel active" id="step-1" aria-labelledby="step-1-title">
+          <div class="panel-heading">
+            <div><span class="eyebrow">Step 1 of 5</span><h2 id="step-1-title" tabindex="-1">Connect to your local IDMP</h2></div>
+            <span class="feature-chip">Auto-discovery</span>
+          </div>
+          <p class="lead">Use any local IDMP host port or let Migration Studio find it. Docker and Windows hosts are supported automatically.</p>
 
-      <!-- Step 2: Source -->
-      <section class="panel step-panel" id="step-2">
-        <h2>Choose migration source</h2>
-        <p class="lead">Upload a zip of your customer folder, or start with a built-in example.</p>
-
-        <div class="source-cards">
-          <div class="source-card">
-            <h3>Upload customer folder</h3>
-            <p>Zip one subfolder per PI Vision display. Each folder needs <code>tags.csv</code> and optionally <code>screenshot.png</code> + <code>display.json</code>.</p>
-            <div class="dropzone" id="dropzone">
-              <input type="file" id="file-input" accept=".zip" hidden>
-              <div class="dropzone-inner">
-                <strong>Drop your .zip here</strong>
-                <span>or click to browse</span>
+          <form id="connect-form" class="form-grid">
+            <label class="field-wide">
+              <span>IDMP URL</span>
+              <div class="input-action">
+                <input type="text" id="idmp-url" name="idmp_url" placeholder="http://localhost:6042" required>
+                <button type="button" class="btn ghost" id="btn-discover">Find local</button>
               </div>
-            </div>
-            <pre class="folder-tree">customer-migration/
-  ops-overview/
-    screenshot.png
-    tags.csv
-    display.json
-  p101-pump/
-    tags.csv</pre>
+              <small>Use the IDMP web/API port (usually ending in 42), not the TSDB REST port ending in 41.</small>
+            </label>
+            <label>
+              <span>Email</span>
+              <input type="email" id="idmp-user" name="user" placeholder="you@company.com">
+            </label>
+            <label>
+              <span>Password</span>
+              <input type="password" id="idmp-password" name="password" autocomplete="current-password">
+            </label>
+            <label class="field-wide">
+              <span>API key <em>optional</em></span>
+              <input type="password" id="idmp-api-key" name="api_key" placeholder="Use instead of email and password" autocomplete="off">
+            </label>
+            <label class="field-wide">
+              <span>Asset search</span>
+              <input type="text" id="keyword" name="keyword" value="SCE" placeholder="Site or equipment prefix">
+              <small>We use this only to verify that the expected element tree is available.</small>
+            </label>
+          </form>
+
+          <div id="discovery-results" class="discovery-grid hidden" aria-live="polite"></div>
+          <div id="validate-result" class="result-box hidden" aria-live="polite"></div>
+          <div class="actions">
+            <span id="connect-hint" class="action-hint">Test the connection to continue.</span>
+            <button type="button" class="btn secondary" id="btn-test">Test connection</button>
+            <button type="button" class="btn primary" id="btn-step1-next" disabled>Continue <span aria-hidden="true">→</span></button>
           </div>
+        </section>
 
-          <div class="source-card">
-            <h3>Use built-in example</h3>
-            <p>Try the Summit Creek oil scenario or the single-display folder example without preparing files.</p>
-            <div id="example-list" class="example-list"></div>
+        <section class="panel step-panel" id="step-2" aria-labelledby="step-2-title">
+          <div class="panel-heading"><div><span class="eyebrow">Step 2 of 5</span><h2 id="step-2-title" tabindex="-1">Choose your source</h2></div></div>
+          <p class="lead">Upload a customer package or explore a ready-made example.</p>
+          <div class="source-cards">
+            <article class="source-card featured">
+              <div class="source-icon" aria-hidden="true">↑</div>
+              <h3>Upload migration package</h3>
+              <p>One folder per PI Vision display with <code>tags.csv</code>, plus optional screenshots and Canvas plans.</p>
+              <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Upload customer migration zip">
+                <input type="file" id="file-input" accept=".zip" hidden aria-label="Migration zip file">
+                <div class="dropzone-inner"><strong>Drop a .zip here</strong><span>or browse your computer · up to 100 MB</span></div>
+              </div>
+            </article>
+            <article class="source-card">
+              <div class="source-icon" aria-hidden="true">◇</div>
+              <h3>Start from an example</h3>
+              <p>Preview the workflow with an included industrial migration scenario.</p>
+              <div id="example-list" class="example-list"></div>
+            </article>
           </div>
-        </div>
+          <div id="ingest-status" class="status-line hidden" aria-live="polite"></div>
+          <div class="actions"><button type="button" class="btn secondary" id="btn-step2-back">← Back</button></div>
+        </section>
 
-        <div class="actions">
-          <button type="button" class="btn secondary" id="btn-step2-back">Back</button>
-        </div>
+        <section class="panel step-panel" id="step-3" aria-labelledby="step-3-title">
+          <div class="panel-heading"><div><span class="eyebrow">Step 3 of 5</span><h2 id="step-3-title" tabindex="-1">Review the migration plan</h2></div><span class="feature-chip">No data writes</span></div>
+          <p class="lead">Confirm target elements, display types, and tag mappings.</p>
+          <div id="review-summary" class="review-summary"></div>
+          <div class="option-card">
+            <label class="checkbox"><input type="checkbox" id="create-new"><span><strong>Create new dashboards</strong><small>Ignore dashboard IDs already present in the scenario.</small></span></label>
+          </div>
+          <details class="type-map">
+            <summary>View PI Vision → IDMP type compatibility</summary>
+            <table id="type-map-table"><caption>Supported migration types</caption><thead><tr><th>PI Vision</th><th>IDMP destination</th></tr></thead><tbody></tbody></table>
+          </details>
+          <div class="actions"><button type="button" class="btn secondary" id="btn-step3-back">← Back</button><button type="button" class="btn primary" id="btn-step3-next">Continue →</button></div>
+        </section>
 
-        <div id="ingest-status" class="status-line hidden"></div>
-      </section>
+        <section class="panel step-panel" id="step-4" aria-labelledby="step-4-title">
+          <div class="panel-heading"><div><span class="eyebrow">Step 4 of 5</span><h2 id="step-4-title" tabindex="-1">Refine the result</h2></div><span class="feature-chip">Optional</span></div>
+          <p class="lead">Tell the migration agent what matters visually. Existing prompts are ready to use.</p>
+          <label class="context-field"><span>Global design direction</span><textarea id="prompt-context" rows="4" placeholder="Match the PI Vision density. Use a clean control-room theme. Prefer trends and stat cards."></textarea><small>Applied to every generated panel and Canvas display.</small></label>
+          <div id="panel-prompts" class="panel-prompts"></div>
+          <div class="actions"><button type="button" class="btn secondary" id="btn-step4-back">← Back</button><button type="button" class="btn primary" id="btn-step4-next">Review &amp; publish →</button></div>
+        </section>
 
-      <!-- Step 3: Review -->
-      <section class="panel step-panel" id="step-3">
-        <h2>Review migration plan</h2>
-        <p class="lead">Confirm displays, panels, and tag mappings before running the migration.</p>
+        <section class="panel step-panel" id="step-5" aria-labelledby="step-5-title">
+          <div class="panel-heading"><div><span class="eyebrow">Step 5 of 5</span><h2 id="step-5-title" tabindex="-1">Publish to IDMP</h2></div><span id="publish-status" class="feature-chip">Ready</span></div>
+          <p class="lead">Migration Studio will create dashboards through the compatible IDMP REST API. Your source data remains untouched.</p>
+          <div id="publish-summary" class="publish-summary"></div>
+          <div id="migrate-progress" class="progress hidden" aria-live="assertive" aria-busy="true"><div class="spinner"></div><div><strong>Publishing dashboards</strong><span>This may take a minute per display.</span></div></div>
+          <div id="migrate-results" class="results" aria-live="polite"></div>
+          <div class="actions">
+            <button type="button" class="btn secondary" id="btn-step5-back">← Refine</button>
+            <button type="button" class="btn secondary" id="btn-start-over">Start over</button>
+            <button type="button" class="btn primary" id="btn-run-migration">Publish dashboards</button>
+            <button type="button" class="btn primary hidden" id="btn-open-idmp">Open IDMP</button>
+          </div>
+        </section>
+      </main>
+    </div>
 
-        <div id="review-summary" class="review-summary"></div>
-
-        <div class="migrate-options">
-          <label class="checkbox">
-            <input type="checkbox" id="create-new">
-            Create new dashboards (ignore existing dashboard IDs in scenario)
-          </label>
-        </div>
-
-        <details class="type-map">
-          <summary>PI Vision to IDMP chart type map</summary>
-          <table id="type-map-table"><thead><tr><th>PI Vision</th><th>IDMP panel</th></tr></thead><tbody></tbody></table>
-        </details>
-
-        <div class="actions">
-          <button type="button" class="btn secondary" id="btn-step3-back">Back</button>
-          <button type="button" class="btn primary" id="btn-step3-next">Continue</button>
-        </div>
-      </section>
-
-      <!-- Step 4: Context -->
-      <section class="panel step-panel" id="step-4">
-        <h2>Prompt context</h2>
-        <p class="lead">Add instructions for the AI panel generator. Global context applies to every panel; per-panel prompts refine individual charts.</p>
-
-        <label class="context-field">
-          Global migration context
-          <textarea id="prompt-context" rows="4" placeholder="e.g. Use control-room dark theme styling. Prefer stat cards for KPIs. Match PI Vision layout density. Avoid tables unless explicitly tagged as table."></textarea>
-          <small>Appended to every AI panel prompt during migration.</small>
-        </label>
-
-        <div id="panel-prompts" class="panel-prompts"></div>
-
-        <div class="actions">
-          <button type="button" class="btn secondary" id="btn-step4-back">Back</button>
-          <button type="button" class="btn primary" id="btn-step4-next">Run migration</button>
-        </div>
-      </section>
-
-      <!-- Step 5: Migrate -->
-      <section class="panel step-panel" id="step-5">
-        <h2>Migration results</h2>
-        <p class="lead">Dashboards are created or updated on your IDMP instance via REST + AI panels.</p>
-
-        <div id="migrate-progress" class="progress hidden">
-          <div class="spinner"></div>
-          <span>Migrating dashboards — this may take a minute per display...</span>
-        </div>
-
-        <div id="migrate-results" class="results"></div>
-
-        <div class="actions">
-          <button type="button" class="btn secondary" id="btn-start-over">Start over</button>
-          <button type="button" class="btn primary hidden" id="btn-open-idmp">Open IDMP</button>
-        </div>
-      </section>
-    </main>
-
-    <footer class="footer">
-      <span>REST-only migration — no docker exec, no manual dashboard clicking</span>
-      <a href="https://github.com/arunTDengine/agentic-pi-migration-tool" target="_blank" rel="noopener">GitHub</a>
-    </footer>
+    <footer class="footer"><span>Portable on macOS, Linux, Windows, and Docker</span><a href="https://github.com/arunTDengine/agentic-pi-migration-tool" target="_blank" rel="noopener">Documentation ↗</a></footer>
   </div>
+  <div id="toast-region" class="toast-region" role="status" aria-live="polite"></div>
 
   <script src="/static/app.js"></script>
 </body>

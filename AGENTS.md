@@ -28,7 +28,7 @@ Recreates PI Vision displays on TDengine IDMP via REST + AI when historian tags 
 ## Commands (run from repo root)
 
 ```bash
-export IDMP_URL=http://localhost:7142
+export IDMP_URL=http://localhost:6042  # or the mapped IDMP xx42 host port
 export IDMP_USER=...
 export IDMP_PASSWORD=...
 
@@ -39,6 +39,22 @@ export IDMP_PASSWORD=...
 ```
 
 `ingest-folder` does not require IDMP credentials.
+
+## Portable deployment
+
+- macOS/Linux UI: `./run-ui.sh`
+- Windows UI: `.\run-ui.ps1` or double-click `run-ui.cmd`
+- Docker Desktop / Compose: `docker compose up --build`
+- Browser UI: `http://localhost:8765`
+- Local discovery: `./run.sh discover` or **Find local** in the UI
+
+The tool requires TDengine **IDMP** REST APIs, not a bare TDengine TSDB endpoint.
+IDMP normally uses a port ending in `42`; TSDB REST normally ends in `41`.
+Inside Docker, localhost targets are translated to `host.docker.internal`.
+For same-network Compose services, set `IDMP_URL` to the private service URL and
+`IDMP_PUBLIC_URL` to the host URL users open in a browser.
+
+Authentication supports either `IDMP_USER` + `IDMP_PASSWORD` or `IDMP_API_KEY`.
 
 ## Customer folder layout
 
@@ -63,7 +79,7 @@ See `scenarios/examples/ops-overview/` and `harness/FOLDER_SPEC.md`.
 | Pie | pie | pie |
 | XY Plot | scatter | scatter |
 | State | state | state-history |
-| P&ID | process | advanced (manual) |
+| P&ID | process / pid / pnid | CANVAS dashboard (Meta2d) |
 
 ## Hard rules for agents
 
@@ -79,6 +95,7 @@ See `scenarios/examples/ops-overview/` and `harness/FOLDER_SPEC.md`.
 | Path | Purpose |
 |------|---------|
 | `agentic_pi_migration/migrator.py` | Core migration engine |
+| `agentic_pi_migration/canvas/` | P&ID Canvas scene and live-panel builder |
 | `agentic_pi_migration/folder_intake.py` | Screenshot + tags folder → JSON |
 | `agentic_pi_migration/client.py` | IDMP REST client |
 | `agentic_pi_migration/web/server.py` | Web UI backend (FastAPI) |
@@ -96,9 +113,12 @@ See `scenarios/examples/ops-overview/` and `harness/FOLDER_SPEC.md`.
 - `POST /api/v1/elements/{id}/panels`
 - `PUT /api/v1/elements/{id}/panels/{panelId}`
 - `PUT /api/v1/elements/{id}/dashboards/{dashboardId}`
+- `POST /api/v1/elements/{id}/dashboards` with `type: CANVAS`
+- `POST /api/v1/elements/{id}/panels/query`
 
 ## Limitations to communicate
 
 - Chart displays: fully agentic
-- P&ID process graphics: spec only; needs manual polish in IDMP advanced panel
+- P&ID process graphics: generated as editable IDMP Canvas dashboards; raw `pens`
+  or an equipment/flow plan may be supplied for pixel-level fidelity
 - No native PI Vision file import — customer provides folder or scenario JSON

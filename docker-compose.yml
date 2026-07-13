@@ -1,0 +1,30 @@
+services:
+  migration-studio:
+    build:
+      context: .
+    image: agentic-pi-migration:local
+    ports:
+      - "${MIGRATION_UI_PORT:-8765}:8765"
+    environment:
+      UI_HOST: "0.0.0.0"
+      UI_PORT: "8765"
+      RUNNING_IN_DOCKER: "1"
+      IDMP_URL: "${IDMP_URL:-http://localhost:6042}"
+      IDMP_PUBLIC_URL: "${IDMP_PUBLIC_URL:-}"
+      IDMP_USER: "${IDMP_USER:-}"
+      IDMP_PASSWORD: "${IDMP_PASSWORD:-}"
+      IDMP_API_KEY: "${IDMP_API_KEY:-}"
+      IDMP_AUTO_DISCOVER: "${IDMP_AUTO_DISCOVER:-1}"
+      IDMP_REQUEST_TIMEOUT: "${IDMP_REQUEST_TIMEOUT:-30}"
+      MAX_UPLOAD_MB: "${MAX_UPLOAD_MB:-100}"
+      UPLOADS_DIR: "/data/uploads"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - migration_uploads:/data/uploads
+      - migration_reports:/data/reports
+    restart: unless-stopped
+
+volumes:
+  migration_uploads:
+  migration_reports:

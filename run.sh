@@ -4,8 +4,26 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 
-: "${IDMP_URL:=http://localhost:7142}"
-: "${IDMP_USER:?Set IDMP_USER (IDMP login email)}"
-: "${IDMP_PASSWORD:?Set IDMP_PASSWORD}"
+if [[ -f .env ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source .env
+  set +a
+fi
 
-PYTHONPATH="$ROOT" python3 -m agentic_pi_migration.cli "$@"
+: "${IDMP_URL:=http://localhost:6042}"
+
+case "${1:-}" in
+  map-types|ingest-folder|discover)
+    ;;
+  *)
+    if [[ -z "${IDMP_API_KEY:-}" ]]; then
+      : "${IDMP_USER:?Set IDMP_USER or IDMP_API_KEY}"
+      : "${IDMP_PASSWORD:?Set IDMP_PASSWORD or IDMP_API_KEY}"
+    fi
+    ;;
+esac
+
+PYTHON="$ROOT/.venv/bin/python"
+[[ -x "$PYTHON" ]] || PYTHON=python3
+PYTHONPATH="$ROOT" "$PYTHON" -m agentic_pi_migration.cli "$@"

@@ -125,6 +125,12 @@ def _load_display_folder(folder: Path) -> dict[str, Any]:
     tag_rows = _load_tags_json(tags_path) if tags_path.suffix == ".json" else _load_tags_csv(tags_path)
     default_element = meta.get("element_id")
     panels = [_parse_tag_row(row, default_element) for row in tag_rows]
+    requested_type = str(meta.get("dashboard_type") or meta.get("type") or "").lower()
+    has_process_panel = any(
+        str(panel["type"]).lower().strip() in ("process", "p&id", "pid", "pnid")
+        for panel in panels
+    )
+    dashboard_type = requested_type or ("canvas" if has_process_panel else "grid")
 
     screenshot = _find_screenshot(folder)
     name = meta.get("name") or folder.name.replace("-", " ").replace("_", " ").title()
@@ -142,14 +148,17 @@ def _load_display_folder(folder: Path) -> dict[str, Any]:
         "description": meta.get("description", f"Agentic migration of PI Vision display '{name}'"),
         "element_id": int(meta.get("element_id") or panels[0]["element_id"]),
         "dashboard_id": int(meta["dashboard_id"]) if meta.get("dashboard_id") else None,
+        "dashboard_type": dashboard_type,
         "theme": theme,
         "refresh_seconds": int(meta.get("refresh_seconds", 15)),
-        "time_from": meta.get("time_from", "now-90d"),
+        "time_from": meta.get("time_from", "now-15m" if dashboard_type == "canvas" else "now-90d"),
         "time_to": meta.get("time_to", "now"),
         "header_html": header,
         "panels": panels,
         "layout": meta.get("layout") or _auto_layout(panels),
     }
+    if dashboard_type == "canvas":
+        display["canvas"] = dict(meta.get("canvas") or meta.get("canvas_plan") or {})
     if screenshot:
         display["reference_screenshot"] = str(screenshot.resolve())
     return display

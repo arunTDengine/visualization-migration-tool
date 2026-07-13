@@ -6,6 +6,7 @@ import concurrent.futures
 from dataclasses import dataclass, field
 from typing import Any
 
+from .canvas import CanvasBuilder, panel_card
 from .client import IdmpClient
 
 # PI Vision symbol / display type → IDMP panel type
@@ -24,6 +25,8 @@ PI_TO_IDMP_PANEL: dict[str, str] = {
     "text": "text",
     "table": "table",  # supported but discouraged for visual-first migrations
     "p&id": "advanced",
+    "pid": "advanced",
+    "pnid": "advanced",
     "process": "advanced",
 }
 
@@ -42,6 +45,15 @@ DEFAULT_WINDOW = {
 
 
 @dataclass
+class SeriesBinding:
+    """Maps one PI tag / series onto an IDMP element attribute."""
+
+    element_id: int
+    attr: str
+    alias: str
+
+
+@dataclass
 class PanelSpec:
     key: str
     title: str
@@ -49,6 +61,9 @@ class PanelSpec:
     element_id: int
     prompt: str
     pi_tags: list[str] = field(default_factory=list)
+    # Optional explicit series bindings (needed when each PI tag lives on a
+    # different child element, e.g. GTU/54FC007/PV/val).
+    series: list[SeriesBinding] = field(default_factory=list)
 
 
 @dataclass
@@ -73,6 +88,8 @@ class DashboardSpec:
     refresh_seconds: int = 15
     time_from: str = "now-15m"
     time_to: str = "now"
+    dashboard_type: str = "grid"
+    canvas: dict[str, Any] = field(default_factory=dict)
 
 
 THEMES: dict[str, dict[str, Any]] = {
@@ -142,6 +159,113 @@ class AgenticPiMigrator:
             "key": "header",
         }
 
+    @staticmethod
+    def _safe_alias(alias: str) -> str:
+        """TDengine rejects dotted aliases in INTERVAL queries (e.g. 54FC007.PV)."""
+        import re
+        cleaned = re.sub(r"[^A-Za-z0-9_]+", "_", alias).strip("_")
+        return cleaned or "series"
+
+    @staticmethod
+    def _series_ya(binding: SeriesBinding, *, dashboard_element_id: int) -> dict[str, Any]:
+        """Build a yaAttributes entry, qualifying child element paths when needed."""
+        import uuid
+
+        if binding.element_id == dashboard_element_id:
+            q = f"attributes['{binding.attr}']"
+        else:
+            q = f"{binding.element_id}|attributes['{binding.attr}']"
+        return {
+            "uuid": str(uuid.uuid4()),
+            "attributeExpression": q,
+            "expression": f"${{{q}}}",
+            "function": None,
+            "parameters": None,
+            "tsColumnType": "none",
+            "groupBy": False,
+            "limits": None,
+            "forecast": None,
+            "timeShift": None,
+            "window": None,
+            "alias": AgenticPiMigrator._safe_alias(binding.alias),
+            "checked": True,
+            "formula": False,
+            "orderBy": None,
+            "filter": None,
+            "displayUom": None,
+            "defaultUomClassId": None,
+            "qualityColumn": None,
+        }
+
+    def _create_panel_from_series(
+        self,
+        spec: PanelSpec,
+        *,
+        dashboard_element_id: int,
+        time_from: str,
+        time_to: str,
+    ) -> dict[str, Any]:
+        """Create a chart panel from explicit series bindings (no AI)."""
+        idmp_type = self.map_pi_type(spec.panel_type)
+        panel = self._panel_body_from_series(
+            spec,
+            dashboard_element_id=dashboard_element_id,
+            time_from=time_from,
+            time_to=time_to,
+        )
+        # Host the panel on the dashboard root so multi-child series resolve.
+        host_id = dashboard_element_id
+        panel_id = self.client.create_panel(host_id, panel)
+        saved = self.client.get_panel(host_id, panel_id)
+        self._apply_live_window(saved, idmp_type, time_from=time_from, time_to=time_to)
+        self.client.update_panel(host_id, panel_id, saved)
+        return {
+            "panelId": panel_id,
+            "elementId": host_id,
+            "type": idmp_type,
+            "key": spec.key,
+            "title": spec.title,
+        }
+
+    def _panel_body_from_series(
+        self,
+        spec: PanelSpec,
+        *,
+        dashboard_element_id: int,
+        time_from: str,
+        time_to: str,
+        panel_type: str | None = None,
+    ) -> dict[str, Any]:
+        """Build a deterministic panel body without writing it to IDMP."""
+        idmp_type = panel_type or self.map_pi_type(spec.panel_type)
+        ya = [
+            self._series_ya(s, dashboard_element_id=dashboard_element_id)
+            for s in spec.series
+        ]
+        panel: dict[str, Any] = {
+            "name": spec.title,
+            "panelType": idmp_type,
+            "categories": [5],
+            "chart": {
+                "graph": {"title": spec.title},
+                "legend": {"placement": "bottom", "showType": "list", "stats": ["last"], "show": True},
+                "series": {
+                    "lineOpacity": 1,
+                    "lineType": "solid",
+                    "lineWidth": 1.5,
+                    "style": "smooth",
+                    "graphMode": "line",
+                },
+                "standardOptions": {"colorSchema": "classic-palette-by-series", "decimals": 2},
+                "tooltip": {"hideZeros": True, "mode": "all", "sortOrder": "descending"},
+            },
+            "yaAttributes": ya,
+            "xaAttributes": [],
+            "params": {"fromText": time_from, "toText": time_to},
+        }
+        self._apply_live_window(panel, idmp_type, time_from=time_from, time_to=time_to)
+        return panel
+
     def _create_chart_panel(
         self,
         spec: PanelSpec,
@@ -150,8 +274,33 @@ class AgenticPiMigrator:
         time_from: str,
         time_to: str,
     ) -> dict[str, Any]:
+        # Prefer explicit series bindings (accurate for hierarchical GTU-style models).
+        if spec.series:
+            return self._create_panel_from_series(
+                spec,
+                dashboard_element_id=dashboard_element_id,
+                time_from=time_from,
+                time_to=time_to,
+            )
+
         prompt = self._build_ai_prompt(spec)
-        panel = self.client.ai_create_panel(spec.element_id, prompt)
+        try:
+            panel = self.client.ai_create_panel(spec.element_id, prompt)
+        except RuntimeError:
+            # AI unavailable — fall back to a single-element line panel from pi_tags.
+            if not spec.pi_tags:
+                raise
+            spec.series = [
+                SeriesBinding(element_id=spec.element_id, attr=tag, alias=tag)
+                for tag in spec.pi_tags
+            ]
+            return self._create_panel_from_series(
+                spec,
+                dashboard_element_id=dashboard_element_id,
+                time_from=time_from,
+                time_to=time_to,
+            )
+
         idmp_type = panel.get("panelType", self.map_pi_type(spec.panel_type))
 
         panel["name"] = spec.title
@@ -227,10 +376,185 @@ class AgenticPiMigrator:
         chart["series"] = series
         panel["chart"] = chart
 
-        if panel_type in ("line", "bar", "scatter", "state-history", "stat", "bar-gauge"):
+        # Absolute historical windows (ISO timestamps) work better without INTERVAL
+        # aggregation — PI Vision exports are already dense samples.
+        use_interval = not (
+            (time_from[:1].isdigit() if time_from else False)
+            or (time_to[:1].isdigit() if time_to else False)
+        )
+        if use_interval and panel_type in ("line", "bar", "scatter", "state-history", "stat", "bar-gauge"):
             for key in ("yaAttributes", "xaAttributes"):
                 for attr in panel.get(key) or []:
                     attr["window"] = {**(attr.get("window") or {}), **DEFAULT_WINDOW}
+
+    def _canvas_inline_panel(self, spec: PanelSpec, dashboard: DashboardSpec) -> dict[str, Any]:
+        """Build an inline canvas panel without changing source data."""
+        process_type = spec.panel_type.lower().strip() in ("process", "p&id", "pid", "pnid")
+        if not spec.series and spec.pi_tags:
+            spec.series = [
+                SeriesBinding(element_id=spec.element_id, attr=tag, alias=tag)
+                for tag in spec.pi_tags
+            ]
+        if spec.series:
+            return self._panel_body_from_series(
+                spec,
+                dashboard_element_id=dashboard.element_id,
+                time_from=dashboard.time_from,
+                time_to=dashboard.time_to,
+                panel_type="line" if process_type else None,
+            )
+        return {
+            "name": spec.title,
+            "panelType": "text",
+            "categories": [5],
+            "textContent": (
+                "<div style='height:100%;box-sizing:border-box;padding:16px;"
+                "background:#0f172a;color:#e2e8f0;border:1px solid #334155;"
+                f"border-radius:12px'><b>{spec.title}</b><div style='margin-top:8px;"
+                f"color:#94a3b8'>{spec.prompt}</div></div>"
+            ),
+        }
+
+    def migrate_canvas_dashboard(
+        self,
+        spec: DashboardSpec,
+        *,
+        update_existing: bool = True,
+    ) -> dict[str, Any]:
+        """Create an editable IDMP Canvas P&ID with live embedded panels."""
+        builder = CanvasBuilder(spec.canvas)
+        scene = builder.build_scene(spec.name)
+        inline_specs: list[tuple[str, int, str, dict[str, Any]]] = [
+            (
+                "header",
+                -2,
+                f"{spec.name} Banner",
+                {
+                    "name": f"{spec.name} Banner",
+                    "panelType": "text",
+                    "categories": [5],
+                    "textContent": spec.header_html,
+                },
+            )
+        ]
+        for index, panel_spec in enumerate(spec.panels):
+            inline_specs.append(
+                (
+                    panel_spec.key,
+                    -10 - index,
+                    panel_spec.title,
+                    self._canvas_inline_panel(panel_spec, spec),
+                )
+            )
+
+        placements = builder.panel_placements(
+            [key for key, _, _, _ in inline_specs if key != "header"],
+            spec.layout,
+        )
+        header_place = dict(
+            (spec.canvas.get("header_placement") or {})
+            or {"x": 50, "y": 30, "w": builder.width - 100, "h": 150}
+        )
+        placements["header"] = header_place
+        params = {
+            "refreshInterval": spec.refresh_seconds * 1000,
+            "fromText": spec.time_from,
+            "toText": spec.time_to,
+        }
+
+        if spec.dashboard_id and update_existing:
+            # GET first: PUT replaces the complete Canvas document.
+            self.client.get_dashboard(spec.element_id, spec.dashboard_id)
+            panel_map: dict[int, int] = {}
+            for _, temp_id, _, panel_body in inline_specs:
+                panel_map[temp_id] = self.client.create_panel(spec.element_id, panel_body)
+            dashboard_id = spec.dashboard_id
+            action = "updated"
+        else:
+            create_body = {
+                "name": spec.name,
+                "description": spec.description,
+                "type": "CANVAS",
+                "params": params,
+                "chart": builder.chart(scene),
+                "newInlinePanels": [
+                    {"tempId": temp_id, "panel": panel_body}
+                    for _, temp_id, _, panel_body in inline_specs
+                ],
+                "panels": [],
+            }
+            result = self.client.create_canvas_dashboard(spec.element_id, create_body)
+            dashboard_id = int(result["id"])
+            panel_map = {
+                int(temp_id): int(panel_id)
+                for temp_id, panel_id in (result.get("panelIdMap") or {}).items()
+            }
+            missing = [temp_id for _, temp_id, _, _ in inline_specs if temp_id not in panel_map]
+            if missing:
+                raise RuntimeError(f"IDMP Canvas creation omitted inline panel IDs: {missing}")
+            action = "created"
+
+        cards: list[dict[str, Any]] = []
+        panel_ids: list[int] = []
+        for key, temp_id, panel_name, _ in inline_specs:
+            placement = placements.get(key)
+            if not placement:
+                raise KeyError(f"Canvas has no placement for panel key: {key}")
+            real_id = panel_map[temp_id]
+            panel_ids.append(real_id)
+            cards.append(
+                panel_card(
+                    key,
+                    placement,
+                    real_id,
+                    spec.element_id,
+                    panel_name,
+                )
+            )
+
+        all_pens = scene + cards
+        self.client.update_canvas_dashboard(
+            spec.element_id,
+            dashboard_id,
+            {
+                "name": spec.name,
+                "description": spec.description,
+                "params": params,
+                "chart": builder.chart(all_pens),
+                "panels": [],
+            },
+        )
+
+        live: list[str] = []
+        failed: list[str] = []
+        for (_, _, name, panel_body), panel_id in zip(inline_specs, panel_ids):
+            if panel_body.get("panelType") == "text":
+                continue
+            try:
+                saved = self.client.get_panel(spec.element_id, panel_id)
+                result = self.client.query_panel(spec.element_id, saved)
+                if result:
+                    live.append(name)
+                else:
+                    failed.append(name)
+            except RuntimeError as exc:
+                failed.append(f"{name}: {exc}")
+
+        return {
+            "action": action,
+            "dashboard_id": dashboard_id,
+            "dashboard_type": "canvas",
+            "element_id": spec.element_id,
+            "name": spec.name,
+            "panel_count": len(cards),
+            "pens": len(all_pens),
+            "panels_live": live,
+            "panels_failed": failed,
+            "url": f"{self.client.base_url}/explorer/dashboard?id={dashboard_id}",
+            "edit_url": (
+                f"{self.client.base_url}/explorer/canvas-dashboard-create/{dashboard_id}"
+            ),
+        }
 
     def migrate_dashboard(
         self,
@@ -239,6 +563,9 @@ class AgenticPiMigrator:
         update_existing: bool = True,
     ) -> dict[str, Any]:
         """Run agentic migration for one PI Vision display → IDMP dashboard."""
+        if spec.dashboard_type.lower() in ("canvas", "pid", "p&id", "pnid", "process"):
+            return self.migrate_canvas_dashboard(spec, update_existing=update_existing)
+
         created: dict[str, dict[str, Any]] = {}
 
         created["header"] = {
@@ -283,7 +610,11 @@ class AgenticPiMigrator:
             "name": spec.name,
             "description": spec.description,
             "panels": layout,
-            "params": {"refreshInterval": spec.refresh_seconds},
+            "params": {
+                "refreshInterval": spec.refresh_seconds,
+                "fromText": spec.time_from,
+                "toText": spec.time_to,
+            },
             "chart": theme,
         }
 
@@ -292,11 +623,7 @@ class AgenticPiMigrator:
             dashboard_id = spec.dashboard_id
             action = "updated"
         else:
-            result = self.client._request(
-                "POST",
-                f"/api/v1/elements/{spec.element_id}/dashboards",
-                body,
-            )
+            result = self.client.create_dashboard(spec.element_id, body)
             dashboard_id = int(result["id"])
             action = "created"
 

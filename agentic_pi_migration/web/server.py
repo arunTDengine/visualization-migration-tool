@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import uuid
 import zipfile
@@ -18,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from agentic_pi_migration.client import IdmpClient
 from agentic_pi_migration.folder_intake import ingest_folder
+from agentic_pi_migration.idmp_compat import COMMON_IDMP_PORTS, discover_local_idmp
 from agentic_pi_migration.loader import load_dashboards
 from agentic_pi_migration.migrator import AgenticPiMigrator, PI_TO_IDMP_PANEL
 
@@ -49,16 +51,17 @@ def _load_dotenv() -> None:
 
 
 _load_dotenv()
+UPLOADS_DIR = Path(os.environ.get("UPLOADS_DIR", str(ROOT / "uploads"))).resolve()
 
 app = FastAPI(
     title="Agentic PI Migration Upgrade",
     description="Web UI for PI Vision to TDengine IDMP dashboard migration",
-    version="1.0.0",
+    version="1.1.0",
 )
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -67,9 +70,10 @@ jobs: dict[str, dict[str, Any]] = {}
 
 
 class ValidateRequest(BaseModel):
-    idmp_url: str = "http://localhost:7142"
-    user: str
-    password: str
+    idmp_url: str = "http://localhost:6042"
+    user: str = ""
+    password: str = ""
+    api_key: str = ""
     keyword: str = "SCE"
 
 
@@ -80,21 +84,26 @@ class ExampleIngestRequest(BaseModel):
 class MigrateRequest(BaseModel):
     job_id: str
     idmp_url: str = "http://localhost:7142"
-    user: str
-    password: str
+    user: str = ""
+    password: str = ""
+    api_key: str = ""
     create_new: bool = False
     workers: int = Field(default=3, ge=1, le=8)
     prompt_context: str = ""
     panel_prompts: dict[str, str] = Field(default_factory=dict)
 
 
-def _default_config() -> dict[str, str]:
-    import os
-
+def _default_config() -> dict[str, Any]:
     return {
-        "idmp_url": os.environ.get("IDMP_URL", "http://localhost:7142"),
+        "idmp_url": os.environ.get(
+            "IDMP_URL",
+            "http://localhost:6042",
+        ),
         "user": os.environ.get("IDMP_USER", os.environ.get("IDMP_USERNAME", "")),
         "has_password": bool(os.environ.get("IDMP_PASSWORD")),
+        "has_api_key": bool(os.environ.get("IDMP_API_KEY")),
+        "default_ports": list(COMMON_IDMP_PORTS),
+        "running_in_docker": bool(os.environ.get("RUNNING_IN_DOCKER")),
     }
 
 
@@ -128,6 +137,7 @@ def _scenario_summary(scenario: dict[str, Any]) -> dict[str, Any]:
                 "name": d.get("name"),
                 "element_id": d.get("element_id"),
                 "dashboard_id": d.get("dashboard_id"),
+                "dashboard_type": d.get("dashboard_type", "grid"),
                 "theme": d.get("theme"),
                 "panel_count": len(d.get("panels", [])),
                 "has_screenshot": bool(d.get("reference_screenshot")),
@@ -171,6 +181,12 @@ def get_config() -> dict[str, Any]:
     return _default_config()
 
 
+@app.get("/api/discover")
+def discover_idmp() -> dict[str, Any]:
+    instances = discover_local_idmp()
+    return {"instances": instances, "count": len(instances)}
+
+
 @app.get("/api/map-types")
 def map_types() -> list[dict[str, str]]:
     return [{"pi_vision": pi, "idmp": idmp} for pi, idmp in sorted(PI_TO_IDMP_PANEL.items())]
@@ -193,14 +209,21 @@ def list_examples() -> list[dict[str, Any]]:
 @app.post("/api/validate")
 def validate_connection(body: ValidateRequest) -> dict[str, Any]:
     try:
-        client = IdmpClient(body.idmp_url, body.user, body.password)
+        client = IdmpClient(
+            body.idmp_url,
+            body.user,
+            body.password,
+            api_key=body.api_key or None,
+        )
         rows = client.search_elements(body.keyword, limit=20)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return {
         "ok": True,
-        "idmp_url": body.idmp_url,
+        "idmp_url": client.base_url,
+        "requested_url": body.idmp_url,
+        "profile": client.profile.to_dict(),
         "keyword": body.keyword,
         "element_count": len(rows),
         "elements": [
@@ -221,6 +244,12 @@ async def ingest_upload(file: UploadFile = File(...)) -> dict[str, Any]:
 
     try:
         content = await file.read()
+        max_bytes = int(os.environ.get("MAX_UPLOAD_MB", "100")) * 1024 * 1024
+        if len(content) > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Upload exceeds the {max_bytes // (1024 * 1024)} MB limit.",
+            )
         zip_path.write_bytes(content)
         extract_dir = job_dir / "folder"
         _safe_extract_zip(zip_path, extract_dir)
@@ -291,7 +320,12 @@ def migrate(body: MigrateRequest) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="Scenario file missing on server")
 
     try:
-        client = IdmpClient(body.idmp_url, body.user, body.password)
+        client = IdmpClient(
+            body.idmp_url,
+            body.user,
+            body.password,
+            api_key=body.api_key or None,
+        )
         migrator = AgenticPiMigrator(
             client,
             workers=body.workers,
@@ -346,8 +380,6 @@ if WEB_DIR.exists():
 
 
 def main() -> None:
-    import os
-
     import uvicorn
 
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)

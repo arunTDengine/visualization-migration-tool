@@ -11,6 +11,7 @@ from pathlib import Path
 
 from agentic_pi_migration.client import IdmpClient
 from agentic_pi_migration.folder_intake import ingest_folder, write_scenario
+from agentic_pi_migration.idmp_compat import discover_local_idmp
 from agentic_pi_migration.loader import load_dashboards
 from agentic_pi_migration.migrator import AgenticPiMigrator, PI_TO_IDMP_PANEL
 
@@ -20,12 +21,19 @@ def _env(name: str, default: str = "") -> str:
 
 
 def cmd_validate(args: argparse.Namespace) -> int:
-    client = IdmpClient(args.idmp_url, args.user, args.password)
+    client = IdmpClient(
+        args.idmp_url,
+        args.user,
+        args.password,
+        api_key=args.api_key or None,
+    )
     rows = client.search_elements(args.keyword or "SCE", limit=10)
     print(f"Connected to {args.idmp_url}")
     print(f"Sample elements ({len(rows)}):")
     for row in rows[:10]:
         print(f"  {row['id']:>18}  {row.get('name')}")
+    print("\nCompatibility profile:")
+    print(json.dumps(client.profile.to_dict(), indent=2))
     return 0
 
 
@@ -33,7 +41,19 @@ def cmd_map_types(_: argparse.Namespace) -> int:
     print("PI Vision → IDMP panel type map (Agentic PI Migration Upgrade):\n")
     for pi, idmp in sorted(PI_TO_IDMP_PANEL.items()):
         print(f"  {pi:12} → {idmp}")
-    print("\nNote: P&ID / process graphics map to 'advanced' — requires manual polish.")
+    print("\nP&ID / process displays automatically publish as editable IDMP Canvas dashboards.")
+    return 0
+
+
+def cmd_discover(_: argparse.Namespace) -> int:
+    rows = discover_local_idmp()
+    if not rows:
+        print("No local IDMP web/API ports found.")
+        print("If IDMP runs in Docker, expose its xx42 port or use the Compose service name.")
+        return 1
+    print("Local IDMP candidates:")
+    for row in rows:
+        print(f"  {row['url']:<36} {row['detail']}")
     return 0
 
 
@@ -57,7 +77,12 @@ def cmd_migrate(args: argparse.Namespace) -> int:
         print(f"Scenario not found: {scenario}", file=sys.stderr)
         return 1
 
-    client = IdmpClient(args.idmp_url, args.user, args.password)
+    client = IdmpClient(
+        args.idmp_url,
+        args.user,
+        args.password,
+        api_key=args.api_key or None,
+    )
     migrator = AgenticPiMigrator(client, workers=args.workers)
     dashboards = load_dashboards(scenario)
 
@@ -71,6 +96,8 @@ def cmd_migrate(args: argparse.Namespace) -> int:
         results.append(result)
         print(f"  {result['action']} dashboard id={result['dashboard_id']} ({result['panel_count']} panels)")
         print(f"  {result['url']}")
+        if result.get("edit_url"):
+            print(f"  Canvas editor: {result['edit_url']}")
 
     if args.report:
         report_path = Path(args.report)
@@ -90,8 +117,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--idmp-url",
-        default=_env("IDMP_URL", "http://localhost:7142"),
-        help="IDMP base URL (default: $IDMP_URL or http://localhost:7142)",
+        default=_env("IDMP_URL", "http://localhost:6042"),
+        help="IDMP base URL (auto-discovers common local xx42 ports)",
     )
     parser.add_argument(
         "--user",
@@ -103,6 +130,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=_env("IDMP_PASSWORD", ""),
         help="IDMP password ($IDMP_PASSWORD)",
     )
+    parser.add_argument(
+        "--api-key",
+        default=_env("IDMP_API_KEY", ""),
+        help="IDMP API key ($IDMP_API_KEY); takes precedence over password login",
+    )
 
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -112,6 +144,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_map = sub.add_parser("map-types", help="Show PI Vision → IDMP panel type mapping")
     p_map.set_defaults(func=cmd_map_types)
+
+    p_discover = sub.add_parser("discover", help="Find locally running IDMP web/API ports")
+    p_discover.set_defaults(func=cmd_discover)
 
     p_ingest = sub.add_parser(
         "ingest-folder",
@@ -145,8 +180,13 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
-    if args.command not in ("map-types", "ingest-folder") and (not args.user or not args.password):
-        print("Set --user/--password or IDMP_USER and IDMP_PASSWORD.", file=sys.stderr)
+    if args.command not in ("map-types", "ingest-folder", "discover") and (
+        not args.api_key and (not args.user or not args.password)
+    ):
+        print(
+            "Set IDMP_API_KEY or provide IDMP_USER and IDMP_PASSWORD.",
+            file=sys.stderr,
+        )
         return 1
     return args.func(args)
 

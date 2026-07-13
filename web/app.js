@@ -5,6 +5,7 @@ const state = {
   summary: null,
   promptContext: "",
   panelPrompts: {},
+  running: false,
 };
 
 const STORAGE_KEY = "agentic-pi-migration-config";
@@ -53,6 +54,7 @@ function credentials() {
     idmp_url: $("idmp-url").value.trim(),
     user: $("idmp-user").value.trim(),
     password: $("idmp-password").value,
+    api_key: $("idmp-api-key").value.trim(),
     keyword: $("keyword").value.trim() || "SCE",
   };
 }
@@ -66,7 +68,12 @@ function setStep(n) {
     const s = Number(el.dataset.step);
     el.classList.toggle("active", s === n);
     el.classList.toggle("done", s < n);
+    if (s === n) el.setAttribute("aria-current", "step");
+    else el.removeAttribute("aria-current");
   });
+  const heading = $(`step-${n}`).querySelector("h2");
+  if (heading) requestAnimationFrame(() => heading.focus());
+  window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 async function api(path, options = {}) {
@@ -78,8 +85,82 @@ async function api(path, options = {}) {
   return data;
 }
 
+function setLoading(button, loading, label) {
+  if (!button) return;
+  if (loading) {
+    button.dataset.label = button.textContent;
+    button.disabled = true;
+    button.classList.add("busy");
+    button.setAttribute("aria-busy", "true");
+    if (label) button.setAttribute("aria-label", label);
+  } else {
+    button.disabled = false;
+    button.classList.remove("busy");
+    button.removeAttribute("aria-busy");
+    button.removeAttribute("aria-label");
+  }
+}
+
+function showToast(message, type = "") {
+  const toast = document.createElement("div");
+  toast.className = `toast ${type}`;
+  toast.textContent = message;
+  $("toast-region").appendChild(toast);
+  window.setTimeout(() => toast.remove(), 4500);
+}
+
+function setConnected(connected, label = "") {
+  state.connected = connected;
+  $("btn-step1-next").disabled = !connected;
+  $("connect-hint").textContent = connected
+    ? "Connection verified. You can continue."
+    : "Test the connection to continue.";
+  document.querySelector(".topbar-status").classList.toggle("connected", connected);
+  $("connection-label").textContent = connected ? label || "Connected" : "Not connected";
+}
+
+function invalidateConnection() {
+  if (!state.connected) return;
+  setConnected(false);
+  $("validate-result").classList.add("hidden");
+}
+
+async function discoverIdmp() {
+  const button = $("btn-discover");
+  const root = $("discovery-results");
+  setLoading(button, true, "Finding local IDMP instances");
+  root.classList.remove("hidden");
+  root.innerHTML = "<span class='status-line'>Scanning common local IDMP ports…</span>";
+  try {
+    const data = await api("/api/discover");
+    if (!data.instances.length) {
+      root.innerHTML = "<span class='status-line'>No local IDMP port responded. Start IDMP or enter its mapped port.</span>";
+      return;
+    }
+    root.innerHTML = data.instances.map((item) => `
+      <button type="button" class="discovery-item" data-url="${escapeHtml(item.url)}">
+        <strong>${escapeHtml(item.url)}</strong>
+        <small>${escapeHtml(item.detail || "IDMP responded")}</small>
+      </button>`).join("");
+    root.querySelectorAll(".discovery-item").forEach((item) => {
+      item.addEventListener("click", () => {
+        $("idmp-url").value = item.dataset.url;
+        root.classList.add("hidden");
+        invalidateConnection();
+        $("idmp-user").focus();
+      });
+    });
+  } catch (err) {
+    root.innerHTML = `<span class="status-line error">${escapeHtml(err.message)}</span>`;
+  } finally {
+    setLoading(button, false);
+  }
+}
+
 async function testConnection() {
   const box = $("validate-result");
+  const button = $("btn-test");
+  setLoading(button, true, "Testing IDMP connection");
   box.classList.remove("hidden", "ok", "error");
   box.textContent = "Testing connection...";
 
@@ -92,24 +173,32 @@ async function testConnection() {
       body: JSON.stringify(body),
     });
 
-    state.connected = true;
-    $("btn-step1-next").disabled = false;
+    setConnected(true, new URL(data.idmp_url).host);
 
     const items = data.elements
       .map((e) => `<li><code>${e.id}</code> ${escapeHtml(e.name || "")}</li>`)
       .join("");
 
     box.classList.add("ok");
+    const profile = data.profile || {};
+    const caps = Object.entries(profile.capabilities || {})
+      .filter(([, enabled]) => enabled !== false)
+      .map(([name, enabled]) => `<span class="capability">${enabled === null ? "Ready to test" : "Available"} · ${escapeHtml(name.replaceAll("_", " "))}</span>`)
+      .join("");
+    const warnings = (profile.warnings || []).map((w) => `<li>${escapeHtml(w)}</li>`).join("");
     box.innerHTML = `
-      <strong>Connected to ${escapeHtml(data.idmp_url)}</strong>
+      <strong>✓ Connected to ${escapeHtml(data.idmp_url)}</strong>
       <p>Found ${data.element_count} element(s) matching "${escapeHtml(data.keyword)}":</p>
       <ul>${items}</ul>
+      ${caps ? `<div class="capability-row">${caps}</div>` : ""}
+      ${warnings ? `<ul>${warnings}</ul>` : ""}
     `;
   } catch (err) {
-    state.connected = false;
-    $("btn-step1-next").disabled = true;
+    setConnected(false);
     box.classList.add("error");
-    box.innerHTML = `<strong>Connection failed</strong><p>${escapeHtml(err.message)}</p>`;
+    box.innerHTML = `<strong>Connection failed</strong><p>${escapeHtml(err.message)}</p><small>Tip: IDMP normally uses a host port ending in 42. Docker users can use host.docker.internal.</small>`;
+  } finally {
+    setLoading(button, false);
   }
 }
 
@@ -154,7 +243,7 @@ async function ingestExample(exampleId) {
 
 async function ingestZip(file) {
   if (!file.name.toLowerCase().endsWith(".zip")) {
-    alert("Please upload a .zip file");
+    showToast("Please upload a .zip file.", "error");
     return;
   }
 
@@ -167,17 +256,21 @@ async function ingestZip(file) {
 
 async function runIngest(fn, label) {
   const status = $("ingest-status");
-  status.classList.remove("hidden");
+  status.classList.remove("hidden", "error", "ok");
   status.textContent = `${label} — processing...`;
 
   try {
     const data = await fn();
     state.jobId = data.job_id;
     state.summary = data.summary;
+    status.classList.add("ok");
     status.textContent = `Ready: ${data.summary.display_count} display(s), ${totalPanels(data.summary)} panel(s)`;
     renderReview(data.summary);
+    $("job-badge").classList.remove("hidden");
+    $("job-badge").textContent = `${data.summary.display_count} display(s) · ${totalPanels(data.summary)} panel(s) ready`;
     setStep(3);
   } catch (err) {
+    status.classList.add("error");
     status.textContent = `Error: ${err.message}`;
   }
 }
@@ -243,11 +336,11 @@ function renderReview(summary) {
     card.innerHTML = `
       <h3>${escapeHtml(d.name)}</h3>
       <div class="display-meta">
-        Element ${d.element_id}
-        ${d.dashboard_id ? ` · Dashboard ${d.dashboard_id}` : " · New dashboard"}
-        · Theme: ${escapeHtml(d.theme || "control-room")}
-        · ${d.panel_count} panel(s)
-        ${d.has_screenshot ? " · Screenshot attached" : ""}
+        <span class="meta-chip">Element ${d.element_id}</span>
+        <span class="meta-chip">${d.dashboard_id ? `Dashboard ${d.dashboard_id}` : "New dashboard"}</span>
+        <span class="meta-chip">${escapeHtml(d.dashboard_type || "grid")}</span>
+        <span class="meta-chip">${d.panel_count} panel(s)</span>
+        ${d.has_screenshot ? '<span class="meta-chip">Screenshot attached</span>' : ""}
       </div>
       <div class="panel-tags">
         ${(d.panels || [])
@@ -276,15 +369,19 @@ async function loadTypeMap() {
 
 async function runMigration() {
   if (!state.jobId) {
-    alert("No migration job loaded. Go back and select a source.");
+    showToast("No migration job loaded. Select a source first.", "error");
     return;
   }
 
   const progress = $("migrate-progress");
   const resultsEl = $("migrate-results");
   progress.classList.remove("hidden");
+  state.running = true;
   resultsEl.innerHTML = "";
   $("btn-start-over").disabled = true;
+  $("btn-step5-back").disabled = true;
+  $("btn-run-migration").classList.add("hidden");
+  $("publish-status").textContent = "Publishing";
 
   try {
     saveConfig();
@@ -297,6 +394,7 @@ async function runMigration() {
         idmp_url: creds.idmp_url,
         user: creds.user,
         password: creds.password,
+        api_key: creds.api_key,
         create_new: $("create-new").checked,
         workers: 3,
         prompt_context: state.promptContext.trim(),
@@ -306,12 +404,28 @@ async function runMigration() {
 
     progress.classList.add("hidden");
     renderMigrationResults(data, creds.idmp_url);
+    $("publish-status").textContent = data.failed ? "Needs attention" : "Complete";
   } catch (err) {
     progress.classList.add("hidden");
+    $("publish-status").textContent = "Failed";
     resultsEl.innerHTML = `<div class="result-card fail"><h3>Migration failed</h3><p>${escapeHtml(err.message)}</p></div>`;
+    $("btn-run-migration").textContent = "Try again";
+    $("btn-run-migration").classList.remove("hidden");
   } finally {
+    state.running = false;
     $("btn-start-over").disabled = false;
+    $("btn-step5-back").disabled = false;
   }
+}
+
+function renderPublishSummary() {
+  const displays = state.summary?.display_count || 0;
+  const panels = state.summary ? totalPanels(state.summary) : 0;
+  const canvas = (state.summary?.displays || []).filter((d) => (d.dashboard_type || "grid") === "canvas").length;
+  $("publish-summary").innerHTML = `
+    <div class="summary-stat"><strong>${displays}</strong><span>displays</span></div>
+    <div class="summary-stat"><strong>${panels}</strong><span>live panels</span></div>
+    <div class="summary-stat"><strong>${canvas}</strong><span>Canvas P&amp;IDs</span></div>`;
 }
 
 function renderMigrationResults(data, idmpUrl) {
@@ -334,6 +448,7 @@ function renderMigrationResults(data, idmpUrl) {
       <h3>${escapeHtml(r.action || "Migrated")}: dashboard ${r.dashboard_id}</h3>
       <p>${r.panel_count || 0} panel(s)</p>
       <p><a href="${escapeHtml(r.url)}" target="_blank" rel="noopener">${escapeHtml(r.url)}</a></p>
+      ${r.edit_url ? `<p><a href="${escapeHtml(r.edit_url)}" target="_blank" rel="noopener">Open Canvas editor</a></p>` : ""}
     `;
     root.appendChild(card);
   }
@@ -354,6 +469,12 @@ function setupDropzone() {
   const input = $("file-input");
 
   zone.addEventListener("click", () => input.click());
+  zone.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      input.click();
+    }
+  });
   input.addEventListener("change", () => {
     if (input.files[0]) ingestZip(input.files[0]);
   });
@@ -373,6 +494,16 @@ function setupDropzone() {
 
 function bindEvents() {
   $("btn-test").addEventListener("click", testConnection);
+  $("btn-discover").addEventListener("click", discoverIdmp);
+  ["idmp-url", "idmp-user", "idmp-password", "idmp-api-key", "keyword"].forEach((id) => {
+    $(id).addEventListener("input", invalidateConnection);
+  });
+  document.querySelectorAll(".stepper .step").forEach((step) => {
+    step.addEventListener("click", () => {
+      const target = Number(step.dataset.step);
+      if (target < state.step) setStep(target);
+    });
+  });
   $("btn-step1-next").addEventListener("click", () => {
     if (!state.connected) return;
     setStep(2);
@@ -388,10 +519,15 @@ function bindEvents() {
   $("btn-step4-next").addEventListener("click", () => {
     state.promptContext = $("prompt-context").value;
     collectPanelPrompts();
+    renderPublishSummary();
     setStep(5);
-    runMigration();
   });
+  $("btn-step5-back").addEventListener("click", () => {
+    if (!state.running) setStep(4);
+  });
+  $("btn-run-migration").addEventListener("click", runMigration);
   $("btn-start-over").addEventListener("click", () => {
+    if ((state.jobId || state.summary) && !window.confirm("Clear this migration plan and start over?")) return;
     state.jobId = null;
     state.summary = null;
     state.promptContext = "";
@@ -400,6 +536,10 @@ function bindEvents() {
     $("migrate-results").innerHTML = "";
     $("migrate-progress").classList.add("hidden");
     $("btn-open-idmp").classList.add("hidden");
+    $("btn-run-migration").classList.remove("hidden");
+    $("btn-run-migration").textContent = "Publish dashboards";
+    $("publish-status").textContent = "Ready";
+    $("job-badge").classList.add("hidden");
     setStep(1);
   });
 
