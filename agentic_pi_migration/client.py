@@ -198,6 +198,14 @@ class IdmpClient:
     def delete_dashboard(self, element_id: int, dashboard_id: int) -> None:
         self._request("DELETE", f"/api/v1/elements/{element_id}/dashboards/{dashboard_id}")
 
+    def list_dashboards(self, element_id: int) -> list[dict[str, Any]]:
+        result = self._request("GET", f"/api/v1/elements/{int(element_id)}/dashboards")
+        if isinstance(result, list):
+            return result
+        if isinstance(result, dict):
+            return list(result.get("rows") or result.get("dashboards") or [])
+        return []
+
     def create_dashboard(self, element_id: int, body: dict[str, Any]) -> dict[str, Any]:
         return self._request("POST", f"/api/v1/elements/{element_id}/dashboards", body)
 
@@ -260,3 +268,25 @@ class IdmpClient:
         query = urllib.parse.urlencode({"keyword": keyword, "limit": limit})
         result = self._request("GET", f"/api/v1/elements/search?{query}")
         return result.get("rows", [])
+
+    def get_element(self, element_id: int) -> dict[str, Any]:
+        return self._request("GET", f"/api/v1/elements/{int(element_id)}")
+
+    def list_child_elements(self, parent_id: int, *, page_size: int = 100) -> list[dict[str, Any]]:
+        """List direct children of an element (paginated)."""
+        rows: list[dict[str, Any]] = []
+        current = 1
+        while True:
+            query = urllib.parse.urlencode(
+                {"parentId": int(parent_id), "limit": page_size, "current": current}
+            )
+            result = self._request("GET", f"/api/v1/elements?{query}")
+            batch = result.get("rows") or []
+            rows.extend(batch)
+            total = int(result.get("total") or len(rows))
+            if len(rows) >= total or not batch:
+                break
+            current += 1
+            if current > 50:
+                break
+        return rows

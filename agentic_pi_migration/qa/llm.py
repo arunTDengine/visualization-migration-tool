@@ -26,7 +26,7 @@ def llm_config_from_env() -> dict[str, Any]:
         or ("https://api.anthropic.com" if provider == "anthropic" else "https://api.openai.com/v1"),
         "model": _env("QA_LLM_MODEL")
         or ("claude-sonnet-4-5" if provider == "anthropic" else "gpt-4.1"),
-        "timeout": int(_env("QA_LLM_TIMEOUT", "90") or "90"),
+        "timeout": int(_env("QA_LLM_TIMEOUT", "180") or "180"),
     }
 
 
@@ -68,6 +68,8 @@ def chat_judge(
     user: str,
     screenshot: dict[str, str] | None = None,
     config: dict[str, Any] | None = None,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
 ) -> dict[str, Any]:
     cfg = config or llm_config_from_env()
     if not cfg.get("api_key"):
@@ -76,8 +78,22 @@ def chat_judge(
         )
     provider = cfg["provider"]
     if provider == "anthropic":
-        return _anthropic_judge(system=system, user=user, screenshot=screenshot, cfg=cfg)
-    return _openai_judge(system=system, user=user, screenshot=screenshot, cfg=cfg)
+        return _anthropic_judge(
+            system=system,
+            user=user,
+            screenshot=screenshot,
+            cfg=cfg,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+    return _openai_judge(
+        system=system,
+        user=user,
+        screenshot=screenshot,
+        cfg=cfg,
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
 
 
 def _openai_judge(
@@ -86,6 +102,8 @@ def _openai_judge(
     user: str,
     screenshot: dict[str, str] | None,
     cfg: dict[str, Any],
+    temperature: float | None = None,
+    max_tokens: int | None = None,
 ) -> dict[str, Any]:
     content: list[dict[str, Any]] = [{"type": "text", "text": user}]
     if screenshot and screenshot.get("base64") and screenshot.get("mime"):
@@ -97,15 +115,17 @@ def _openai_judge(
                 },
             }
         )
-    body = {
+    body: dict[str, Any] = {
         "model": cfg["model"],
-        "temperature": 0.1,
+        "temperature": 0.35 if temperature is None else temperature,
         "response_format": {"type": "json_object"},
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": content},
         ],
     }
+    if max_tokens:
+        body["max_tokens"] = max_tokens
     base = cfg["base_url"].rstrip("/")
     url = base if base.endswith("/chat/completions") else f"{base}/chat/completions"
     raw = _post_json(
@@ -124,6 +144,8 @@ def _anthropic_judge(
     user: str,
     screenshot: dict[str, str] | None,
     cfg: dict[str, Any],
+    temperature: float | None = None,
+    max_tokens: int | None = None,
 ) -> dict[str, Any]:
     content: list[dict[str, Any]] = [{"type": "text", "text": user}]
     if screenshot and screenshot.get("base64") and screenshot.get("mime"):
@@ -142,8 +164,8 @@ def _anthropic_judge(
         )
     body = {
         "model": cfg["model"],
-        "max_tokens": 2000,
-        "temperature": 0.1,
+        "max_tokens": max_tokens or 4000,
+        "temperature": 0.35 if temperature is None else temperature,
         "system": system,
         "messages": [{"role": "user", "content": content}],
     }

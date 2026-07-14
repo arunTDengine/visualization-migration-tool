@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -22,6 +22,11 @@ from agentic_pi_migration.folder_intake import ingest_folder
 from agentic_pi_migration.idmp_compat import COMMON_IDMP_PORTS, discover_local_idmp
 from agentic_pi_migration.loader import load_dashboards
 from agentic_pi_migration.migrator import AgenticPiMigrator, PI_TO_IDMP_PANEL
+from agentic_pi_migration.hardcoded_examples import (
+    HARDCODED_EXAMPLES,
+    build_hardcoded_scenario,
+    list_hardcoded_examples,
+)
 from agentic_pi_migration.qa import run_quality_check
 from agentic_pi_migration.qa.llm import llm_config_from_env
 
@@ -30,12 +35,7 @@ WEB_DIR = ROOT / "web"
 UPLOADS_DIR = ROOT / "uploads"
 SCENARIOS_DIR = ROOT / "scenarios"
 
-BUILTIN_EXAMPLES: dict[str, str] = {
-    "summit-creek-oil": "Summit Creek oil — 3 dashboards (ops, P-101, SEP-101)",
-    "examples/ops-overview": "Single display folder intake example",
-    "examples/pump-train-pnid": "Editable P&ID — animated pump train Canvas",
-    "examples/houston-refinery-pivision": "PI Vision image demo — Houston refinery column",
-}
+BUILTIN_EXAMPLES: dict[str, str] = {}  # folder examples removed — see hardcoded_examples.py
 
 
 def _load_dotenv() -> None:
@@ -78,12 +78,29 @@ class ValidateRequest(BaseModel):
     user: str = ""
     password: str = ""
     api_key: str = ""
-    keyword: str = "SCE"
+    keyword: str = ""
 
 
 class ExampleIngestRequest(BaseModel):
     example_id: str
     target_element_id: int | None = Field(default=None, gt=0)
+    display_name: str = ""
+
+
+class PanelRename(BaseModel):
+    key: str
+    title: str
+
+
+class DisplayRename(BaseModel):
+    index: int = Field(ge=0)
+    name: str | None = None
+    panels: list[PanelRename] = Field(default_factory=list)
+
+
+class RenameRequest(BaseModel):
+    name: str | None = None
+    displays: list[DisplayRename] = Field(default_factory=list)
 
 
 class MigrateRequest(BaseModel):
@@ -92,7 +109,7 @@ class MigrateRequest(BaseModel):
     user: str = ""
     password: str = ""
     api_key: str = ""
-    create_new: bool = False
+    create_new: bool = True
     workers: int = Field(default=3, ge=1, le=8)
     prompt_context: str = ""
     panel_prompts: dict[str, str] = Field(default_factory=dict)
@@ -150,9 +167,11 @@ def _scenario_summary(scenario: dict[str, Any]) -> dict[str, Any]:
         "name": scenario.get("name", "Migration"),
         "description": scenario.get("description", ""),
         "source_folder": scenario.get("source_folder"),
+        "intake_warnings": list(scenario.get("intake_warnings") or []),
         "display_count": len(displays),
         "displays": [
             {
+                "index": i,
                 "name": d.get("name"),
                 "element_id": d.get("element_id"),
                 "dashboard_id": d.get("dashboard_id"),
@@ -163,6 +182,7 @@ def _scenario_summary(scenario: dict[str, Any]) -> dict[str, Any]:
                 "has_canvas_plan": bool(d.get("canvas")),
                 "canvas_equipment_count": len((d.get("canvas") or {}).get("equipment", [])),
                 "canvas_flow_count": len((d.get("canvas") or {}).get("flows", [])),
+                "canvas_pen_count": len((d.get("canvas") or {}).get("pens") or []),
                 "panels": [
                     {
                         "key": p.get("key"),
@@ -175,9 +195,49 @@ def _scenario_summary(scenario: dict[str, Any]) -> dict[str, Any]:
                     for p in d.get("panels", [])
                 ],
             }
-            for d in displays
+            for i, d in enumerate(displays)
         ],
     }
+
+
+def _apply_rename(scenario: dict[str, Any], body: RenameRequest) -> None:
+    if body.name is not None and body.name.strip():
+        scenario["name"] = body.name.strip()
+    displays = scenario.get("displays")
+    if not isinstance(displays, list):
+        return
+    for item in body.displays:
+        if item.index < 0 or item.index >= len(displays):
+            raise HTTPException(status_code=400, detail=f"Display index out of range: {item.index}")
+        display = displays[item.index]
+        if item.name is not None and item.name.strip():
+            display["name"] = item.name.strip()
+            if display.get("description") and "(Example)" in str(display.get("description")):
+                display["description"] = item.name.strip()
+        panels = display.get("panels") or []
+        by_key = {str(p.get("key")): p for p in panels if p.get("key") is not None}
+        for panel_rename in item.panels:
+            title = panel_rename.title.strip()
+            if not title:
+                continue
+            panel = by_key.get(panel_rename.key)
+            if panel is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unknown panel key '{panel_rename.key}' on display {item.index}",
+                )
+            panel["title"] = title
+
+
+async def _save_upload(upload: UploadFile, dest: Path, *, max_bytes: int) -> None:
+    content = await upload.read()
+    if len(content) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File {upload.filename} exceeds the {max_bytes // (1024 * 1024)} MB limit.",
+        )
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(content)
 
 
 def _retarget_scenario(scenario: dict[str, Any], element_id: int) -> None:
@@ -240,16 +300,55 @@ def map_types() -> list[dict[str, str]]:
 
 @app.get("/api/examples")
 def list_examples() -> list[dict[str, Any]]:
-    items = []
-    for example_id, label in BUILTIN_EXAMPLES.items():
-        path = SCENARIOS_DIR / f"{example_id}.json" if "/" not in example_id else None
-        if example_id.startswith("examples/"):
-            folder = SCENARIOS_DIR / example_id
-            available = folder.is_dir()
-        else:
-            available = path is not None and path.exists()
-        items.append({"id": example_id, "label": label, "available": available})
-    return items
+    return list_hardcoded_examples()
+
+
+@app.post("/api/ingest/example")
+def ingest_example(body: ExampleIngestRequest) -> dict[str, Any]:
+    example_id = body.example_id
+    if example_id not in HARDCODED_EXAMPLES:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Unknown example: {example_id}. Use demo-grid-dashboard or demo-canvas-pnid.",
+        )
+    if body.target_element_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Choose a target element ID from Step 1 (required for hardcoded examples).",
+        )
+
+    job_dir = UPLOADS_DIR / uuid.uuid4().hex[:12]
+    job_dir.mkdir(parents=True, exist_ok=True)
+    scenario_path = job_dir / "scenario.json"
+
+    try:
+        scenario = build_hardcoded_scenario(
+            example_id, target_element_id=int(body.target_element_id)
+        )
+        custom_name = (body.display_name or "").strip()
+        if custom_name:
+            scenario["name"] = custom_name
+            for display in scenario.get("displays") or []:
+                display["name"] = custom_name
+        scenario_path.write_text(json.dumps(scenario, indent=2), encoding="utf-8")
+    except (KeyError, ValueError) as exc:
+        shutil.rmtree(job_dir, ignore_errors=True)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        shutil.rmtree(job_dir, ignore_errors=True)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    job = _create_job(
+        scenario,
+        source=f"hardcoded:{example_id}",
+        scenario_path=scenario_path,
+        folder_path=None,
+    )
+    return {
+        "job_id": job["id"],
+        "summary": job["summary"],
+        "intake_warnings": job["summary"].get("intake_warnings") or scenario.get("intake_warnings") or [],
+    }
 
 
 @app.post("/api/validate")
@@ -316,34 +415,68 @@ async def ingest_upload(file: UploadFile = File(...)) -> dict[str, Any]:
         scenario_path=scenario_path,
         folder_path=root,
     )
-    return {"job_id": job["id"], "summary": job["summary"]}
+    return {
+        "job_id": job["id"],
+        "summary": job["summary"],
+        "intake_warnings": job["summary"].get("intake_warnings") or [],
+    }
 
 
-@app.post("/api/ingest/example")
-def ingest_example(body: ExampleIngestRequest) -> dict[str, Any]:
-    example_id = body.example_id
-    if example_id not in BUILTIN_EXAMPLES:
-        raise HTTPException(status_code=404, detail=f"Unknown example: {example_id}")
+@app.post("/api/ingest/files")
+async def ingest_files(
+    tags: UploadFile = File(..., description="tags.csv or tags.json (required)"),
+    display: UploadFile | None = File(None, description="display.json (optional)"),
+    screenshot: UploadFile | None = File(None, description="PI Vision screenshot (optional)"),
+    element_id: int | None = Form(None),
+    name: str | None = Form(None),
+    dashboard_type: str | None = Form(None),
+) -> dict[str, Any]:
+    """Assemble a migration folder from individual files (no zip required)."""
+    tag_name = (tags.filename or "tags.csv").lower()
+    if not (tag_name.endswith(".csv") or tag_name.endswith(".json")):
+        raise HTTPException(status_code=400, detail="Upload tags.csv or tags.json")
 
     job_dir = UPLOADS_DIR / uuid.uuid4().hex[:12]
-    job_dir.mkdir(parents=True, exist_ok=True)
-    scenario_path = job_dir / "scenario.json"
-    folder_path: Path | None = None
+    root = job_dir / "folder"
+    root.mkdir(parents=True, exist_ok=True)
+    max_bytes = int(os.environ.get("MAX_UPLOAD_MB", "100")) * 1024 * 1024
 
     try:
-        if example_id.startswith("examples/"):
-            folder = SCENARIOS_DIR / example_id
-            if not folder.is_dir():
-                raise HTTPException(status_code=404, detail=f"Example folder not found: {example_id}")
-            scenario = ingest_folder(folder)
-            folder_path = folder
-        else:
-            src = SCENARIOS_DIR / f"{example_id}.json"
-            if not src.exists():
-                raise HTTPException(status_code=404, detail=f"Example scenario not found: {example_id}")
-            scenario = json.loads(src.read_text(encoding="utf-8"))
-        if body.target_element_id is not None:
-            _retarget_scenario(scenario, body.target_element_id)
+        tag_dest = root / ("tags.json" if tag_name.endswith(".json") else "tags.csv")
+        await _save_upload(tags, tag_dest, max_bytes=max_bytes)
+
+        if display is not None and display.filename:
+            await _save_upload(display, root / "display.json", max_bytes=max_bytes)
+        elif element_id or name or dashboard_type:
+            meta: dict[str, Any] = {}
+            if name:
+                meta["name"] = name.strip()
+            if element_id:
+                meta["element_id"] = int(element_id)
+            if dashboard_type:
+                meta["dashboard_type"] = dashboard_type.strip().lower()
+            (root / "display.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+        if screenshot is not None and screenshot.filename:
+            ext = Path(screenshot.filename).suffix.lower() or ".jpg"
+            if ext not in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
+                raise HTTPException(status_code=400, detail="Screenshot must be an image file")
+            await _save_upload(screenshot, root / f"screenshot{ext}", max_bytes=max_bytes)
+
+        # If display.json exists and form overrides were sent, merge them.
+        display_path = root / "display.json"
+        if display_path.exists() and (element_id or name or dashboard_type):
+            meta = json.loads(display_path.read_text(encoding="utf-8"))
+            if name:
+                meta["name"] = name.strip()
+            if element_id:
+                meta["element_id"] = int(element_id)
+            if dashboard_type:
+                meta["dashboard_type"] = dashboard_type.strip().lower()
+            display_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+        scenario = ingest_folder(root)
+        scenario_path = job_dir / "scenario.json"
         scenario_path.write_text(json.dumps(scenario, indent=2), encoding="utf-8")
     except HTTPException:
         shutil.rmtree(job_dir, ignore_errors=True)
@@ -354,11 +487,23 @@ def ingest_example(body: ExampleIngestRequest) -> dict[str, Any]:
 
     job = _create_job(
         scenario,
-        source=f"example:{example_id}",
+        source="upload:files",
         scenario_path=scenario_path,
-        folder_path=folder_path,
+        folder_path=root,
     )
-    return {"job_id": job["id"], "summary": job["summary"]}
+    return {
+        "job_id": job["id"],
+        "summary": job["summary"],
+        "intake_warnings": job["summary"].get("intake_warnings") or [],
+        "files": {
+            "tags": True,
+            "display": (root / "display.json").exists(),
+            "screenshot": any(root.glob("screenshot.*")),
+        },
+    }
+
+
+
 
 
 @app.get("/api/jobs/{job_id}")
@@ -367,6 +512,24 @@ def get_job(job_id: str) -> dict[str, Any]:
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
+
+
+@app.post("/api/jobs/{job_id}/rename")
+def rename_job(job_id: str, body: RenameRequest) -> dict[str, Any]:
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found. Re-upload or re-select your scenario.")
+    scenario_path = Path(job["scenario_path"])
+    if not scenario_path.exists():
+        raise HTTPException(status_code=404, detail="Scenario file missing on server")
+    try:
+        scenario = json.loads(scenario_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Scenario JSON is invalid") from exc
+    _apply_rename(scenario, body)
+    scenario_path.write_text(json.dumps(scenario, indent=2), encoding="utf-8")
+    job["summary"] = _scenario_summary(scenario)
+    return {"job_id": job_id, "summary": job["summary"]}
 
 
 @app.post("/api/migrate")

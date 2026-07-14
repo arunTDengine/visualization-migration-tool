@@ -1,6 +1,0 @@
-panel_key,title,type,element_id,pi_tags,prompt
-fleet_kpi,Fleet Production Summary,kpi,2023515258075392,total_oil_production_bpd|total_gas_production_mcfd,stat card oil bpd and gas mcfd
-reliability,Station Reliability Index,gauge,2023515258075392,asset_health_pct,gauge asset health 0-100
-allocation,Production Allocation by Station,pie,2023515258075392,total_oil_production_bpd,pie chart production by station
-trend,15-Minute Production Profile,trend,2023515258075392,total_oil_production_bpd|total_gas_production_mcfd,line chart oil and gas last 15 minutes
-kpi_snapshot,Fleet KPI Snapshot,bar-gauge,2023515258075392,total_oil_production_bpd|active_alarm_count|asset_health_pct,bar-gauge fleet KPIs

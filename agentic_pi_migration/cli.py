@@ -28,7 +28,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
         args.password,
         api_key=args.api_key or None,
     )
-    rows = client.search_elements(args.keyword or "SCE", limit=10)
+    rows = client.search_elements(args.keyword or "", limit=10)
     print(f"Connected to {args.idmp_url}")
     print(f"Sample elements ({len(rows)}):")
     for row in rows[:10]:
@@ -98,7 +98,7 @@ def cmd_migrate(args: argparse.Namespace) -> int:
         print(f"\n▶ Agentic migration: {spec.name}")
         result = migrator.migrate_dashboard(
             spec,
-            update_existing=not args.create_new,
+            update_existing=bool(args.update_existing),
         )
         results.append(result)
         print(f"  {result['action']} dashboard id={result['dashboard_id']} ({result['panel_count']} panels)")
@@ -177,7 +177,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_validate = sub.add_parser("validate", help="Test IDMP connection and list elements")
-    p_validate.add_argument("--keyword", default="SCE", help="Element search keyword")
+    p_validate.add_argument("--keyword", default="", help="Element search keyword (optional)")
     p_validate.set_defaults(func=cmd_validate)
 
     p_map = sub.add_parser("map-types", help="Show PI Vision → IDMP panel type mapping")
@@ -201,13 +201,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_migrate = sub.add_parser("migrate", help="Run agentic migration from scenario JSON")
     p_migrate.add_argument(
         "scenario",
-        help="Path to scenario JSON (e.g. scenarios/summit-creek-oil.json)",
+        help="Path to scenario JSON (e.g. scenarios/generated.json)",
     )
     p_migrate.add_argument("--workers", type=int, default=3, help="Parallel AI panel workers")
     p_migrate.add_argument(
+        "--update-existing",
+        action="store_true",
+        help="Update dashboard_id from the scenario instead of creating a new dashboard",
+    )
+    p_migrate.add_argument(
         "--create-new",
         action="store_true",
-        help="Create new dashboards instead of updating dashboard_id in scenario",
+        help="(default) Always create a new dashboard; kept for compatibility",
     )
     p_migrate.add_argument("--report", help="Write migration report JSON to this path")
     assist = p_migrate.add_mutually_exclusive_group()

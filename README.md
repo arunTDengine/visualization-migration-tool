@@ -1,369 +1,295 @@
 # Agentic PI Migration Upgrade
 
-**Agentic Migration** for PI Vision → TDengine IDMP: an AI-assisted, API-driven tool that recreates historian displays when tags and data already match.
+**Product:** Agentic PI Migration Upgrade  
+**Vendor:** TDengine  
+**Audience:** Internal engineering, solutions, and customer-success teams  
+**Status:** Ready for internal delivery  
 
-No container shell access. No manual dashboard clicking. Point it at a running IDMP instance, provide a display spec (PI tags + panel types + layout), and the agent builds live dashboards via REST.
+**Runs standalone** — no Cursor or IDE required. Use the browser **Migration Studio**, the **CLI**, or **Docker**. Optional agent docs (`AGENTS.md`) exist only if you choose to automate with an LLM coding agent.
 
-## Migration Studio (easiest setup)
+Recreate PI Vision–style operator displays on **TDengine IDMP** when historian tags already map to IDMP elements. Publish editable **grid dashboards** and **Canvas P&IDs** over the IDMP REST API. No container shell access. No manual redraw of the customer display.
 
-Start the wizard in your browser — no CLI commands required:
+---
 
-```bash
-git clone https://github.com/arunTDengine/agentic-pi-migration-tool.git
-cd agentic-pi-migration-tool
-cp .env.example .env    # optional: pre-fill IDMP_URL and IDMP_USER
+## What you get
 
-./run-ui.sh                     # macOS / Linux
-# .\run-ui.ps1                  # Windows PowerShell
-# Open http://127.0.0.1:8765
-```
+| Surface | How to run | Who it’s for |
+|---------|------------|--------------|
+| **Migration Studio** | `./run-ui.sh` → `http://127.0.0.1:8765` | Demos, workshops, interactive migrations |
+| **CLI** | `./run.sh …` | Scripts, CI, repeatable customer jobs |
+| **Docker** | `docker compose up --build` | Shared / locked-down environments |
 
-The responsive browser UI walks through five guided steps:
+| Capability | Description |
+|------------|-------------|
+| Zip or individual file ingest | `tags.csv` / `tags.json`, optional `display.json`, optional screenshot |
+| Built-in walkthroughs | One grid + one Canvas example, retargeted to a live IDMP element |
+| Rename before publish | Edit job name, dashboard names, and panel titles in Review |
+| Always-new dashboards | Creates a new dashboard by default; if the name exists, appends `· xxxx` |
+| AF-style tag resolve | Paths like `TAG.PV` bind to child-element leaf attributes (e.g. `val`) |
+| Grid + Canvas publish | KPI / gauge / trend panels and editable Meta2d P&IDs |
+| Optional external LLM | Prompt co-pilot + post-publish QA scoring |
+| Auth | IDMP password login or API key (Bearer), REST only |
 
-1. **Connect** — auto-discover a local IDMP or enter its URL; use password or API-key auth
-2. **Source** — upload a `.zip` of your customer folder, or pick a built-in example
-3. **Review** — confirm displays, panels, and tag mappings
-4. **Refine** — optionally guide panel and Canvas generation
-5. **Publish** — confirm the plan, migrate, and open live dashboard links
+**Prerequisite:** Source tags and data already match (or resolve under) IDMP elements. This product migrates *displays*, not historian topology.
 
-`run-ui.sh` creates a local `.venv` and installs dependencies automatically on first run.
+---
 
-### One-command Docker deployment
+## Requirements
 
-Docker Desktop works the same way on Windows, macOS, and Linux:
+| Component | Notes |
+|-----------|--------|
+| Python 3.10+ | Local Studio / CLI (venv created by `./run-ui.sh` / `./run.sh`) |
+| Running IDMP | Web/API port typically ending in **42** (not TSDB **41**) |
+| Network | Tool host → IDMP REST |
+| Browser | Any modern browser for Studio |
+| Optional | OpenAI-compatible or Anthropic API key for co-pilot / QA |
+| Optional | Docker Desktop for Compose deployment |
 
-```bash
-docker compose up --build
-# Open http://localhost:8765
-```
+---
 
-The Compose file persists uploads, includes a healthcheck, and maps
-`host.docker.internal` on Linux. If IDMP runs on the host, enter its normal
-browser URL such as `http://localhost:7142`; the container translates localhost
-internally. If IDMP is another Compose service, set:
+## Quick start (standalone)
 
-```env
-IDMP_URL=http://your-idmp-service:6042
-IDMP_PUBLIC_URL=http://localhost:7142
-```
-
-`IDMP_PUBLIC_URL` keeps generated dashboard links browser-accessible while the
-tool uses the private service URL for API calls.
-
-### Local IDMP compatibility
-
-Migration Studio accepts URLs with or without `http://` and with or without an
-`/api/v1` suffix. It probes current and legacy API roots, supports common token
-response formats, password or API-key auth, request timeouts, and automatic
-discovery across common local IDMP ports.
-
-This means locally deployed **TDengine IDMP** versions exposing element, panel,
-and dashboard REST APIs. It does not mean bare TDengine TSDB: port `xx41`
-provides the TSDB REST/SQL service, while this tool needs the IDMP web/API port,
-normally `xx42`.
-
-```bash
-./run.sh discover
-./run.sh validate --keyword SCE
-```
-
-## Agent harness
-
-AI agents (Cursor, CI, MCP) should read **[AGENTS.md](AGENTS.md)** first.
-
-| Harness file | Purpose |
-|--------------|---------|
-| [AGENTS.md](AGENTS.md) | Primary agent instructions |
-| [harness/AGENT_CONTEXT.md](harness/AGENT_CONTEXT.md) | Extended reference |
-| [harness/FOLDER_SPEC.md](harness/FOLDER_SPEC.md) | Customer folder + tags.csv spec |
-| [harness/run-agent-workflow.sh](harness/run-agent-workflow.sh) | End-to-end wrapper script |
-| [.cursor/skills/agentic-pi-migration/SKILL.md](.cursor/skills/agentic-pi-migration/SKILL.md) | Cursor skill |
-
-```bash
-chmod +x harness/run-agent-workflow.sh
-./harness/run-agent-workflow.sh full /path/to/customer-folder
-```
-
-## What it does
-
-```
-PI Vision display inventory          IDMP asset model (elements + attributes)
-         │                                        │
-         └──────────► scenario JSON ◄─────────────┘
-                           │
-                           ▼
-              Agentic PI Migration Upgrade
-                • login via REST
-                • AI panel generation per symbol
-                • editable Canvas P&ID generation
-                • 15-minute live window + 30s resolution
-                • themed 24-column grid layout
-                • PUT dashboard (update or create)
-                           │
-                           ▼
-                 Live IDMP dashboards
-```
-
-## PI Vision → IDMP mapping
-
-| PI Vision symbol | IDMP panel |
-|------------------|------------|
-| Trend | `line` |
-| Gauge | `gauge` |
-| Value / KPI | `stat` |
-| Bar | `bar` |
-| Pie | `pie` |
-| XY Plot | `scatter` |
-| State / timeline | `state-history` |
-| P&ID / process graphic | IDMP `CANVAS` (editable Meta2d P&ID) |
-
-**Prerequisite:** PI tags must map to IDMP element attributes (e.g. `SUMMIT_CREEK_ENERGY...P101.vibration_mm_s` → `SCE-AST-EFA-P101.vibration_mm_s`).
-
-## Create an editable P&ID
-
-P&IDs publish as editable IDMP Canvas dashboards—not screenshots. They support
-equipment symbols, animated flows, live values, and embedded charts.
-
-### Fastest path: Migration Studio
-
-1. Run `./run-ui.sh` and open `http://127.0.0.1:8765`.
-2. Connect to IDMP and search for the asset that will own the dashboard.
-3. Choose **Editable P&ID — animated pump train Canvas**.
-4. Select a target element ID returned by the asset search.
-5. Review, publish, then click **Open Canvas editor**.
-
-The included starter is
-[`scenarios/examples/pump-train-pnid/`](scenarios/examples/pump-train-pnid/).
-It has no deployment-specific tags, so it can create a basic editable P&ID on
-any valid IDMP element.
-
-### CLI path
-
-```bash
-cp -R scenarios/examples/pump-train-pnid my-pnid
-
-# Replace element_id: 0 in both files with an ID from:
-./run.sh validate --keyword YOUR_ASSET
-
-./run.sh ingest-folder my-pnid -o scenarios/my-pnid.json
-./run.sh migrate scenarios/my-pnid.json --create-new --report reports/my-pnid.json
-```
-
-Open the `edit_url` printed by the migration.
-
-The routing row in `tags.csv` is intentionally small:
-
-```csv
-panel_key,title,type,element_id,pi_tags,prompt
-process_overview,Pump Train Process Overview,pnid,YOUR_ELEMENT_ID,,Editable P&ID process overview
-```
-
-The matching `display.json` contains `canvas.equipment`,
-`canvas.flows`, and optional `canvas.panel_placements`. Add a `binding` with an
-IDMP attribute name for live values, or add regular `trend`, `gauge`, or `kpi`
-rows to embed live panels. See
-[harness/FOLDER_SPEC.md](harness/FOLDER_SPEC.md) for complete examples.
-
-### Advanced reference
-
-[`build_plant_ops_canvas.py`](build_plant_ops_canvas.py) is the REST-only
-high-fidelity Desert Peak Solar Farm reference. It demonstrates a 5200×2800
-Canvas, animated AC/DC paths, live inverter values, embedded charts, and
-verification queries. Its element and attribute IDs are deployment-specific;
-change the constants at the top before running it.
-
-## Customer folder layout
-
-Each PI Vision display is one subfolder with `screenshot.png`, `tags.csv`, and optional `display.json`. Multiple PI tags in one CSV cell are separated with `|` (pipe).
-
-Full folder spec: [harness/FOLDER_SPEC.md](harness/FOLDER_SPEC.md). Sample folder: [scenarios/examples/ops-overview/](scenarios/examples/ops-overview/).
-
-## Customer upgrade example
-
-This walkthrough shows how an operations team migrates PI Vision displays to TDengine IDMP without rebuilding dashboards by hand.
-
-### Situation
-
-Summit Creek Energy runs PI Vision for three production displays:
-
-- **Eagle Ford Production Control Board** — fleet KPIs and production trends
-- **P-101 Mechanical Performance Monitor** — pump vibration, pressure, runtime
-- **SEP-101 Vessel Operations Display** — separator level, pressure, throughput
-
-They deploy TDengine IDMP on a parallel stack (`oilupstream-idmp` at `http://localhost:7142`). Historian tags already map to IDMP element attributes (for example, `SCE-AST-EFA-P101.vibration_mm_s`).
-
-### Step 1 — Prepare the migration folder
-
-For each PI Vision screen, create a subfolder with a screenshot and tag list:
-
-```
-summit-creek-migration/
-  ops-overview/
-    screenshot.png          # PI Vision screen capture
-    tags.csv                # panels + PI tags (required)
-    display.json            # optional: name, element_id, theme
-  p101-pump/
-    screenshot.png
-    tags.csv
-    display.json
-  sep101-vessel/
-    screenshot.png
-    tags.csv
-    display.json
-```
-
-Example `ops-overview/tags.csv`:
-
-```csv
-panel_key,title,type,element_id,pi_tags,prompt
-fleet_kpi,Fleet Production Summary,kpi,2023515258075392,total_oil_production_bpd|total_gas_production_mcfd,stat card oil bpd and gas mcfd
-reliability,Station Reliability Index,gauge,2023515258075392,asset_health_pct,gauge asset health 0-100
-allocation,Production Allocation by Station,pie,2023515258075392,total_oil_production_bpd,pie chart production by station
-trend,15-Minute Production Profile,trend,2023515258075392,total_oil_production_bpd|total_gas_production_mcfd,line chart oil and gas last 15 minutes
-kpi_snapshot,Fleet KPI Snapshot,bar-gauge,2023515258075392,total_oil_production_bpd|active_alarm_count|asset_health_pct,bar-gauge fleet KPIs
-```
-
-Optional `ops-overview/display.json`:
-
-```json
-{
-  "name": "Eagle Ford Production Control Board",
-  "element_id": 2023515258075392,
-  "theme": "control-room"
-}
-```
-
-See `scenarios/examples/ops-overview/` for a working sample folder.
-
-### Step 2 — Install and configure the tool
+### 1. Get the repo and configure
 
 ```bash
 git clone https://github.com/arunTDengine/agentic-pi-migration-tool.git
 cd agentic-pi-migration-tool
 cp .env.example .env
-# Edit .env: IDMP_URL plus IDMP_USER/IDMP_PASSWORD or IDMP_API_KEY
 ```
 
-### Step 3 — Validate IDMP connectivity
+Edit `.env`:
 
-Confirm the IDMP instance is reachable and assets exist:
+```env
+IDMP_URL=http://localhost:6842
+IDMP_USER=you@company.com
+IDMP_PASSWORD=••••••••
+# IDMP_API_KEY=          # alternative to password
+
+# Optional external LLM (Studio co-pilot + QA)
+QA_LLM_API_KEY=
+QA_LLM_PROVIDER=openai
+QA_LLM_MODEL=gpt-4.1
+QA_LLM_ASSIST_PANELS=1
+QA_LLM_POWER=1
+```
+
+### 2. Launch Migration Studio
 
 ```bash
-./run.sh validate --keyword SCE
+./run-ui.sh                 # macOS / Linux  →  http://127.0.0.1:8765
+# .\run-ui.ps1              # Windows PowerShell
 ```
 
-This lists matching elements (station, pumps, separators) and confirms credentials work.
-
-### Step 4 — Convert folder to scenario JSON
-
-No login required for this step:
+Or with Docker:
 
 ```bash
-./run.sh ingest-folder ./summit-creek-migration -o scenarios/summit-creek-generated.json
+docker compose up --build
+# Studio → http://localhost:8765
 ```
 
-The tool reads each subfolder, attaches screenshot paths as `reference_screenshot`, and builds a migration spec. An AI agent can open those screenshots to refine titles and layout before the next step.
+Open the URL in a browser. You do not need Cursor, VS Code, or any other IDE.
 
-### Step 5 — Run the migration
+### 3. Run a migration in the Studio
 
-```bash
-./run.sh migrate scenarios/summit-creek-generated.json --report reports/summit-creek.json
-```
+1. **Connect** — enter IDMP URL and credentials; search for a site / element  
+2. **Source** — upload a zip, drop individual files, or load a built-in walkthrough  
+3. **Review** — rename displays/panels if needed; leave **Always create a new dashboard** on  
+4. **Refine** — optional design direction and panel prompts  
+5. **Publish** — create dashboards; open the returned IDMP URLs  
 
-The migrator logs in via REST, creates AI panels for each symbol, applies a 24-column grid layout, sets a 15-minute live window (`now-15m` to `now`), and publishes dashboards on the target elements.
+---
 
-Or run the full pipeline in one command:
+## Migration Studio
 
-```bash
-./harness/run-agent-workflow.sh full ./summit-creek-migration
-```
+Five-step workflow for demos and customer workshops.
 
-### Step 6 — Verify in IDMP
-
-Open each dashboard in the IDMP UI and confirm:
-
-- Panels show live data (start the data simulator if charts are empty)
-- Titles and chart types match the PI Vision reference screenshots
-- Time range is the last 15 minutes with 15-second refresh
-
-### What the customer does not need to do
-
-- Shell into the IDMP container
-- Click through the dashboard builder panel by panel
-- Export PI Vision displays in a proprietary format (screenshots + tag CSV is enough)
-
-P&ID and process-graphics displays can be listed in `tags.csv` as type
-`process`, `pid`, or `pnid`. They automatically publish as editable IDMP Canvas
-dashboards with animated flows, equipment symbols, live Formula values, and
-embedded trend/KPI panels. Add an equipment/flow plan—or raw Meta2d `pens`—to
-`display.json` for screenshot-level fidelity. The Canvas path uses REST only and
-does not modify source data.
-
-## Quick start (Summit Creek oil)
-
-```bash
-cd agentic-pi-migration-tool
-export IDMP_URL=http://localhost:7142
-export IDMP_USER=arun@tdengine.com
-export IDMP_PASSWORD='your-password'
-
-# Test connection
-./run.sh validate --keyword SCE
-
-# See type mapping
-./run.sh map-types
-
-# Migrate all 3 oil dashboards from scenario spec
-./run.sh migrate scenarios/summit-creek-oil.json --report reports/latest.json
-```
-
-## Scenario file format
-
-Each display in `scenarios/*.json` describes one PI Vision screen:
-
-```json
-{
-  "name": "Eagle Ford Production Control Board",
-  "element_id": 2023515258075392,
-  "dashboard_id": 2025648565328640,
-  "theme": "control-room",
-  "panels": [
-    {
-      "key": "trend",
-      "title": "15-Minute Production Profile",
-      "type": "trend",
-      "element_id": 2023515258075392,
-      "prompt": "line chart oil bpd and gas mcfd",
-      "pi_tags": ["total_oil_production_bpd", "total_gas_production_mcfd"]
-    }
-  ],
-  "layout": [
-    {"panel": "header", "col": 0, "row": 0, "w": 24, "h": 2},
-    {"panel": "trend", "col": 0, "row": 6, "w": 16, "h": 8}
-  ]
-}
-```
-
-## Agentic workflow (MCP)
-
-1. **Discover** — list IDMP elements + attributes (MCP or `/elements/search`)
-2. **Map** — PI tag list → element ID + attribute names
-3. **Spec** — write scenario JSON (panel types, titles, layout)
-4. **Migrate** — run `agentic-pi-migration migrate scenario.json`
-5. **Validate** — open dashboards, confirm live 15-minute data flow
-
-## Limitations
-
-- **Chart displays** (trends, KPIs, gauges, bars): fully automated via REST + AI
-- **P&ID process graphics**: generated as editable IDMP Canvas dashboards; exact
-  screenshot matching still benefits from a supplied equipment/flow plan or raw Meta2d pens
-- **PI Vision drag-and-drop export**: not native — you provide tag/layout spec or a CSV export converted to JSON
-- **Compatibility boundary**: requires TDengine IDMP REST element/panel/dashboard
-  APIs; a standalone TDengine TSDB endpoint is not sufficient
-
-## Branding
-
-| Term | Meaning |
+| Step | Purpose |
 |------|---------|
-| **Agentic Migration** | AI + API automates display recreation; human defines tag map + layout |
-| **Agentic PI Migration Upgrade** | This tool — PI Vision → IDMP upgrade path without rip-and-replace |
+| **Connect** | Discover or enter IDMP URL; password or API-key auth; element search |
+| **Source** | Zip package, individual files, or hardcoded walkthroughs |
+| **Review** | Rename job / dashboards / panels; accuracy warnings; create-new + LLM toggles |
+| **Refine** | Global design direction and optional per-panel prompts |
+| **Publish** | Live progress, results, streaming QA feedback |
+
+**Reusable uploads:** Clear files and re-upload from Source without restarting the app.
+
+### Source options
+
+| Option | Use when |
+|--------|----------|
+| **Zip upload** | Full customer folder (tags + display + screenshot) |
+| **Individual files** | You only have `tags.csv` (and optionally `display.json` / screenshot). Set display name, element ID, and dashboard type in the form |
+| **Hardcoded walkthroughs** | Demo the product path without a customer package. Pick **target element ID** from Connect; optionally override **display name** |
+
+| Walkthrough | Type | What it shows |
+|-------------|------|----------------|
+| Example · Grid dashboard | Grid | KPI / gauge / trend publish path |
+| Example · Canvas P&ID | Canvas | Animated process Canvas + embedded trend |
+
+Walkthrough placeholder tags (e.g. `quality_index`) are **remapped at publish** to live child attributes under the target element. Production jobs should still ship real `tags.csv` series.
+
+### Naming and dashboard create policy
+
+- In **Review**, edit the job name, each dashboard / display name, and each panel title before continuing.  
+- **Always create a new dashboard** is on by default — existing dashboard IDs in a scenario are not overwritten.  
+- If a dashboard with the same name already exists on that element, publish appends a random suffix, e.g. `Plant Ops · a3f9`.
+
+### Tag binding (AF-style element trees)
+
+Tags are resolved against the element tree when publishing:
+
+| Tag form | Resolution |
+|----------|------------|
+| `UNIT101.PV` | Walk children `UNIT101` → `PV` → leaf attribute (usually `val`) |
+| Exact attribute on host / leaf | Bound when the path exists |
+| Unknown walkthrough placeholders | Sample distinct live leaves under the target so demos still publish |
+
+Historian series bindings win over model-invented attribute names.
+
+---
+
+## Input contract
+
+Accuracy comes from structured assets — not from a long chat prompt alone.
+
+| File | Required | Role |
+|------|----------|------|
+| `tags.csv` / `tags.json` | **Yes** | Panel keys, titles, types, `element_id`, `pi_tags` |
+| `display.json` | Recommended for P&ID | Canvas plan, placements, time window, theme |
+| `screenshot.*` | Recommended | Human visual reference (not computer vision) |
+
+### `tags.csv` columns
+
+| Column | Required | Description |
+|--------|----------|-------------|
+| `panel_key` | Yes | Stable key referenced by layout / Canvas placements |
+| `title` | Yes | Operator-facing panel title |
+| `type` | Yes | `trend`, `kpi`, `gauge`, `bar`, `pie`, … or `pnid`/`process` for Canvas |
+| `element_id` | Yes* | IDMP element (`*` or set once in `display.json` / Studio form) |
+| `pi_tags` | Strongly recommended | Pipe-separated paths, e.g. `UNIT101.PV\|UNIT101.MV` |
+| `prompt` | Optional | Panel-specific guidance |
+
+```csv
+panel_key,title,type,element_id,pi_tags,prompt
+product_flows,Flow Control Valve Readings,trend,1234567890,UNIT101.PV|UNIT101.MV,multi-series product flows
+feed_flow,Feed Flow,trend,1234567890,FEED01.PV|FEED01.SV,scheduled vs actual
+```
+
+Folder layout and Canvas fields: **[harness/FOLDER_SPEC.md](harness/FOLDER_SPEC.md)**.
+
+### Accuracy policy
+
+- Tag series bindings win over model-invented attributes  
+- Intake surfaces warnings (missing tags, empty Canvas plan, absolute time windows, no screenshot)  
+- Optional external LLM polishes prompts / chart chrome; it does **not** invent tags  
+- Optional QA agent scores topology, live data, completeness, and demo-readiness after publish  
+
+---
+
+## CLI (no browser required)
+
+Configure `.env`, then:
+
+```bash
+./run.sh discover
+./run.sh validate --keyword YOUR_SITE
+
+./run.sh ingest-folder /path/to/display -o scenarios/generated.json
+./run.sh migrate scenarios/generated.json --report reports/latest.json
+# Default: create a new dashboard (add --update-existing only to overwrite by ID)
+
+./run.sh qa reports/latest.json --folder /path/to/display -o reports/latest-qa.json
+
+# End-to-end harness
+./harness/run-agent-workflow.sh full /path/to/display
+```
+
+| Document | Purpose |
+|----------|---------|
+| [harness/FOLDER_SPEC.md](harness/FOLDER_SPEC.md) | Customer package schema |
+| [harness/QA_AGENT.md](harness/QA_AGENT.md) | External LLM quality-check |
+| [harness/run-agent-workflow.sh](harness/run-agent-workflow.sh) | validate → ingest → migrate → qa |
+| [AGENTS.md](AGENTS.md) | **Optional** — only if using Cursor or another coding agent |
+
+---
+
+## Architecture
+
+```text
+Customer package                    TDengine IDMP
+┌─────────────────────┐            ┌──────────────────────────┐
+│ tags.csv            │            │ Elements / attributes    │
+│ display.json        │── ingest ─▶│ REST login / Bearer      │
+│ screenshot (ref)    │            │ Panels + dashboards      │
+└─────────────────────┘            │ Canvas (Meta2d)          │
+          │                        └──────────────────────────┘
+          ▼                                    ▲
+  scenario.json ── migrate (REST) ─────────────┘
+          │
+          ├─ Tag resolve (AF paths → leaf attrs)
+          ├─ Unique dashboard name (·xxxx if needed)
+          ├─ IDMP panel AI (optional path)
+          ├─ External LLM co-pilot (optional)
+          └─ QA agent (optional post-check)
+```
+
+Sign-in is IDMP REST login (`POST /api/v1/users/login`) or API-key Bearer. The tool does not use the IDMP browser session cookie.
+
+IDMP host ports ending in **42** are the web/API surface. Ports ending in **41** are TSDB REST/SQL and are not used for dashboard publish.
+
+---
+
+## Configuration reference
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `IDMP_URL` | `http://localhost:6042` | IDMP base URL |
+| `IDMP_USER` / `IDMP_PASSWORD` | — | Password auth |
+| `IDMP_API_KEY` | — | Alternative Bearer auth |
+| `IDMP_AUTO_DISCOVER` | `1` | Probe common local ports |
+| `IDMP_PUBLIC_URL` | — | Browser-facing URL when API is on a private host |
+| `UI_HOST` / `UI_PORT` | `127.0.0.1` / `8765` | Studio bind |
+| `MAX_UPLOAD_MB` | `100` | Upload size limit |
+| `QA_LLM_API_KEY` | — | External LLM for co-pilot + QA |
+| `QA_LLM_PROVIDER` | `openai` | `openai` or `anthropic` |
+| `QA_LLM_MODEL` | `gpt-4.1` | Model id |
+| `QA_LLM_ASSIST_PANELS` | `1` | Enable panel co-pilot |
+| `QA_LLM_POWER` | `1` | Richer briefs and series polish |
+| `QA_LLM_TIMEOUT` | `180` | Seconds |
+| `QA_PASS_SCORE` | `75` | QA pass threshold |
+
+Complete template: **[.env.example](.env.example)**.
+
+---
+
+## Docker notes
+
+- Compose maps Studio to host port `8765` and persists uploads.  
+- If IDMP runs on the host, keep `IDMP_URL=http://localhost:…42`; the container resolves localhost via `host.docker.internal`.  
+- If IDMP is another Compose service, set `IDMP_URL` to the service URL and `IDMP_PUBLIC_URL` to the browser URL for generated links.
+
+---
+
+## Verify installation
+
+```bash
+./run.sh discover
+./run.sh validate --keyword YOUR_SITE
+./run-ui.sh   # then:
+curl -s http://127.0.0.1:8765/api/health
+```
+
+Expected health response includes `"status":"ok"`.
+
+---
+
+## Support and ownership
+
+| Item | Detail |
+|------|--------|
+| Repository | https://github.com/arunTDengine/agentic-pi-migration-tool |
+| Primary path (no IDE) | `./run-ui.sh` → Migration Studio in a browser |
+| Automation | `./run.sh` and `./harness/run-agent-workflow.sh` |
+| Internal delivery | Configure `.env`, launch Studio, Connect → walkthrough or customer package → Review names → Publish |
+
+Optional: for agent-assisted delivery inside Cursor, load **[AGENTS.md](AGENTS.md)** first. Day-to-day use does not depend on it.

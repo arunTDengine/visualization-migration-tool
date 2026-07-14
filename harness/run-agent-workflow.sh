@@ -36,7 +36,7 @@ shift || true
 
 case "$cmd" in
   validate)
-    ./run.sh validate --keyword "${1:-SCE}"
+    ./run.sh validate --keyword "${1:-}"
     ;;
   ingest)
     folder="${1:?customer folder required}"

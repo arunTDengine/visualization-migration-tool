@@ -70,8 +70,8 @@
             </label>
             <label class="field-wide">
               <span>Asset search</span>
-              <input type="text" id="keyword" name="keyword" value="SCE" placeholder="Site or equipment prefix">
-              <small>We use this only to verify that the expected element tree is available.</small>
+              <input type="text" id="keyword" name="keyword" value="" placeholder="Site, unit, or equipment name">
+              <small>Optional search to confirm elements are reachable on this IDMP.</small>
             </label>
           </form>
 
@@ -85,44 +85,87 @@
         </section>
 
         <section class="panel step-panel" id="step-2" aria-labelledby="step-2-title">
-          <div class="panel-heading"><div><span class="eyebrow">Step 2 of 5</span><h2 id="step-2-title" tabindex="-1">Choose your source</h2></div></div>
-          <p class="lead">Upload a customer package or explore a ready-made example.</p>
+          <div class="panel-heading"><div><span class="eyebrow">Step 2 of 5</span><h2 id="step-2-title" tabindex="-1">Add your display assets</h2></div></div>
+          <p class="lead">Upload a zip, or add individual files — <code>tags.csv</code> is required; screenshot and <code>display.json</code> improve accuracy.</p>
           <div class="source-cards">
             <article class="source-card featured">
               <div class="source-icon" aria-hidden="true">↑</div>
-              <h3>Upload migration package</h3>
-              <p>One folder per PI Vision display with <code>tags.csv</code>, plus optional screenshots and Canvas plans.</p>
+              <h3>Upload package (.zip)</h3>
+              <p>One folder per PI Vision display with <code>tags.csv</code>, optional screenshot, and optional Canvas <code>display.json</code>.</p>
               <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Upload customer migration zip">
                 <input type="file" id="file-input" accept=".zip" hidden aria-label="Migration zip file">
-                <div class="dropzone-inner"><strong>Drop a .zip here</strong><span>or browse your computer · up to 100 MB</span></div>
+                <div class="dropzone-inner"><strong>Drop a .zip here</strong><span>or browse · up to 100 MB</span></div>
+              </div>
+            </article>
+            <article class="source-card">
+              <div class="source-icon" aria-hidden="true">☰</div>
+              <h3>Upload individual files</h3>
+              <p>Build a job from the pieces you have — no zip needed.</p>
+              <div class="file-fields">
+                <label>
+                  <span>tags.csv / tags.json <em>required</em></span>
+                  <input type="file" id="file-tags" accept=".csv,.json,text/csv,application/json">
+                </label>
+                <label>
+                  <span>display.json <em>optional — layout accuracy</em></span>
+                  <input type="file" id="file-display" accept=".json,application/json">
+                </label>
+                <label>
+                  <span>Screenshot <em>optional — visual reference</em></span>
+                  <input type="file" id="file-screenshot" accept="image/*">
+                </label>
+                <label>
+                  <span>Display name <em>optional</em></span>
+                  <input type="text" id="file-name" placeholder="e.g. Unit 3 Distillation">
+                </label>
+                <label>
+                  <span>Root element ID <em>optional if in display.json / tags</em></span>
+                  <input type="number" id="file-element-id" min="1" placeholder="IDMP element id">
+                </label>
+                <label>
+                  <span>Dashboard type</span>
+                  <select id="file-dashboard-type">
+                    <option value="">Auto (from tags / display.json)</option>
+                    <option value="canvas">Canvas P&amp;ID</option>
+                    <option value="grid">Grid dashboard</option>
+                  </select>
+                </label>
+                <button type="button" class="btn primary" id="btn-ingest-files">Assemble &amp; continue</button>
               </div>
             </article>
             <article class="source-card">
               <div class="source-icon" aria-hidden="true">◇</div>
-              <h3>Start from an example</h3>
-              <p>Preview the workflow with an included industrial migration scenario.</p>
+              <h3>Hardcoded walkthroughs</h3>
+              <p>Two built-in examples that show how the tool works — retarget to your IDMP element.</p>
               <label>
-                <span>Example target element ID</span>
-                <input type="number" id="target-element-id" list="target-element-options" min="1" placeholder="Select an element found in step 1">
+                <span>Target element ID <em>required</em></span>
+                <input type="number" id="target-element-id" list="target-element-options" min="1" placeholder="From Step 1 search">
                 <datalist id="target-element-options"></datalist>
-                <small>Required for the portable P&amp;ID example. Use an element returned by your asset search.</small>
+              </label>
+              <label>
+                <span>Display name <em>optional — overrides example title</em></span>
+                <input type="text" id="example-display-name" placeholder="e.g. Unit 3 Pump Train">
               </label>
               <div id="example-list" class="example-list"></div>
             </article>
           </div>
           <div id="ingest-status" class="status-line hidden" aria-live="polite"></div>
-          <div class="actions"><button type="button" class="btn secondary" id="btn-step2-back">← Back</button></div>
+          <div id="intake-warnings" class="result-box hidden" aria-live="polite"></div>
+          <div class="actions">
+            <button type="button" class="btn secondary" id="btn-step2-back">← Back</button>
+            <button type="button" class="btn ghost" id="btn-clear-source">Clear files &amp; re-upload</button>
+          </div>
         </section>
 
         <section class="panel step-panel" id="step-3" aria-labelledby="step-3-title">
           <div class="panel-heading"><div><span class="eyebrow">Step 3 of 5</span><h2 id="step-3-title" tabindex="-1">Review the migration plan</h2></div><span class="feature-chip">No data writes</span></div>
-          <p class="lead">Confirm target elements, display types, and tag mappings.</p>
+          <p class="lead">Rename displays and panels if needed, then confirm targets and tag mappings.</p>
           <div id="review-summary" class="review-summary"></div>
           <div class="option-card">
-            <label class="checkbox"><input type="checkbox" id="create-new"><span><strong>Create new dashboards</strong><small>Ignore dashboard IDs already present in the scenario.</small></span></label>
+            <label class="checkbox"><input type="checkbox" id="create-new" checked><span><strong>Always create a new dashboard</strong><small>Never overwrite an existing dashboard ID. If the name is taken, a random suffix is added (e.g. · a3f9).</small></span></label>
           </div>
           <div class="option-card" id="assist-option">
-            <label class="checkbox"><input type="checkbox" id="external-assist" checked><span><strong>External LLM helps IDMP create panels</strong><small>OpenAI co-pilots prompts → IDMP internal AI builds the panel (series fallback if needed).</small></span></label>
+            <label class="checkbox"><input type="checkbox" id="external-assist" checked><span><strong>External LLM power co-pilot</strong><small>Expands design direction, polishes chart chrome/aliases, and writes rich briefs for IDMP AI. Tag attribute bindings stay locked for accuracy.</small></span></label>
           </div>
           <details class="type-map">
             <summary>View PI Vision → IDMP type compatibility</summary>

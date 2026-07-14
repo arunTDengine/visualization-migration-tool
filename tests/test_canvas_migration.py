@@ -168,25 +168,12 @@ class CanvasMigrationTests(unittest.TestCase):
         self.assertEqual(display["time_from"], "now-15m")
         self.assertIn("canvas", display)
 
-    def test_bundled_pnid_example_preserves_canvas_plan(self) -> None:
-        folder = (
-            Path(__file__).resolve().parents[1]
-            / "scenarios"
-            / "examples"
-            / "pump-train-pnid"
-        )
-
-        scenario = ingest_folder(folder)
+    def test_hardcoded_canvas_example_retargets(self) -> None:
+        from agentic_pi_migration.hardcoded_examples import build_hardcoded_scenario
+        scenario = build_hardcoded_scenario("demo-canvas-pnid", target_element_id=42)
         display = scenario["displays"][0]
-
         self.assertEqual(display["dashboard_type"], "canvas")
-        self.assertEqual(len(display["canvas"]["equipment"]), 3)
-        self.assertEqual(len(display["canvas"]["flows"]), 2)
-        self.assertEqual(
-            display["canvas"]["panel_placements"][0]["panel"],
-            "process_overview",
-        )
+        self.assertEqual(display["element_id"], 42)
+        self.assertTrue(display.get("canvas", {}).get("equipment"))
+        self.assertTrue(display.get("canvas", {}).get("flows"))
 
-
-if __name__ == "__main__":
-    unittest.main()

@@ -110,7 +110,7 @@ function credentials() {
     user: $("idmp-user").value.trim(),
     password: $("idmp-password").value,
     api_key: $("idmp-api-key").value.trim(),
-    keyword: $("keyword").value.trim() || "SCE",
+    keyword: $("keyword").value.trim() || "",
   };
 }
 
@@ -275,6 +275,7 @@ function escapeHtml(str) {
 
 async function loadExamples() {
   const list = $("example-list");
+  if (!list) return;
   list.innerHTML = "<span class='status-line'>Loading examples...</span>";
 
   try {
@@ -285,8 +286,8 @@ async function loadExamples() {
       btn.type = "button";
       btn.className = "example-btn";
       btn.disabled = !ex.available;
-      btn.innerHTML = `<strong>${escapeHtml(ex.id)}</strong><span>${escapeHtml(ex.label)}</span>`;
-      btn.addEventListener("click", () => ingestExample(ex.id));
+      btn.innerHTML = `<strong>${escapeHtml(ex.label)}</strong><span>${escapeHtml(ex.blurb || "")}</span>`;
+      btn.addEventListener("click", () => ingestExample(ex.id, ex.requires_element !== false));
       list.appendChild(btn);
     }
   } catch (err) {
@@ -294,24 +295,25 @@ async function loadExamples() {
   }
 }
 
-async function ingestExample(exampleId) {
-  const isPortablePnid = exampleId === "examples/pump-train-pnid";
+async function ingestExample(exampleId, requiresElement = true) {
   const targetElementId = Number($("target-element-id").value);
-  if (isPortablePnid && (!Number.isInteger(targetElementId) || targetElementId <= 0)) {
-    showToast("Choose a target element ID for the P&ID example.", "error");
+  if (requiresElement && (!Number.isInteger(targetElementId) || targetElementId <= 0)) {
+    showToast("Choose a target element ID from Step 1.", "error");
     $("target-element-id").focus();
     return;
   }
+  const displayName = ($("example-display-name")?.value || "").trim();
   await runIngest(async () => {
     return api("/api/ingest/example", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         example_id: exampleId,
-        target_element_id: isPortablePnid ? targetElementId : null,
+        target_element_id: targetElementId,
+        display_name: displayName,
       }),
     });
-  }, `Loaded example: ${exampleId}`);
+  }, `Loaded ${exampleId}`);
 }
 
 async function ingestZip(file) {
@@ -325,19 +327,94 @@ async function ingestZip(file) {
     form.append("file", file);
     return api("/api/ingest/upload", { method: "POST", body: form });
   }, `Uploaded ${file.name}`);
+  // Allow selecting the same zip again later
+  const input = $("file-input");
+  if (input) input.value = "";
+}
+
+async function ingestFiles() {
+  const tagsInput = $("file-tags");
+  if (!tagsInput?.files?.[0]) {
+    showToast("tags.csv (or tags.json) is required.", "error");
+    tagsInput?.focus();
+    return;
+  }
+  await runIngest(async () => {
+    const form = new FormData();
+    form.append("tags", tagsInput.files[0]);
+    const display = $("file-display")?.files?.[0];
+    const shot = $("file-screenshot")?.files?.[0];
+    if (display) form.append("display", display);
+    if (shot) form.append("screenshot", shot);
+    const name = $("file-name")?.value?.trim();
+    const elementId = $("file-element-id")?.value;
+    const dtype = $("file-dashboard-type")?.value;
+    if (name) form.append("name", name);
+    if (elementId) form.append("element_id", elementId);
+    if (dtype) form.append("dashboard_type", dtype);
+    return api("/api/ingest/files", { method: "POST", body: form });
+  }, "Assembled files");
+  // Keep form reusable — clear file picks so another selection always fires change
+  clearSourceFileInputs({ keepMeta: true });
+}
+
+function clearSourceFileInputs({ keepMeta = false } = {}) {
+  ["file-input", "file-tags", "file-display", "file-screenshot"].forEach((id) => {
+    const el = $(id);
+    if (el) el.value = "";
+  });
+  if (!keepMeta) {
+    if ($("file-name")) $("file-name").value = "";
+    if ($("file-element-id")) $("file-element-id").value = "";
+    if ($("file-dashboard-type")) $("file-dashboard-type").value = "";
+  }
+}
+
+function showIntakeWarnings(warnings) {
+  const box = $("intake-warnings");
+  if (!box) return;
+  if (!warnings || !warnings.length) {
+    box.classList.add("hidden");
+    box.innerHTML = "";
+    return;
+  }
+  box.classList.remove("hidden", "ok");
+  box.classList.add("error");
+  box.innerHTML = `<strong>Accuracy checks</strong><ul>${warnings
+    .map((w) => `<li>${escapeHtml(w)}</li>`)
+    .join("")}</ul><small>Fix tags / display.json for higher fidelity, or continue if intentional.</small>`;
+}
+
+function resetSourceState() {
+  state.jobId = null;
+  state.summary = null;
+  state.panelPrompts = {};
+  clearSourceFileInputs();
+  if ($("example-display-name")) $("example-display-name").value = "";
+  showIntakeWarnings([]);
+  const status = $("ingest-status");
+  if (status) {
+    status.classList.add("hidden");
+    status.textContent = "";
+  }
+  if ($("job-badge")) $("job-badge").classList.add("hidden");
+  if ($("review-summary")) $("review-summary").innerHTML = "";
 }
 
 async function runIngest(fn, label) {
   const status = $("ingest-status");
   status.classList.remove("hidden", "error", "ok");
   status.textContent = `${label} — processing...`;
+  const btnFiles = $("btn-ingest-files");
+  if (btnFiles) btnFiles.disabled = true;
 
   try {
     const data = await fn();
     state.jobId = data.job_id;
     state.summary = data.summary;
     status.classList.add("ok");
-    status.textContent = `Ready: ${data.summary.display_count} display(s), ${totalPanels(data.summary)} panel(s)`;
+    status.textContent = `Ready: ${data.summary.display_count} display(s), ${totalPanels(data.summary)} panel(s) — you can re-upload anytime from Source`;
+    showIntakeWarnings(data.intake_warnings || data.summary?.intake_warnings || []);
     renderReview(data.summary);
     $("job-badge").classList.remove("hidden");
     $("job-badge").textContent = `${data.summary.display_count} display(s) · ${totalPanels(data.summary)} panel(s) ready`;
@@ -345,6 +422,8 @@ async function runIngest(fn, label) {
   } catch (err) {
     status.classList.add("error");
     status.textContent = `Error: ${err.message}`;
+  } finally {
+    if (btnFiles) btnFiles.disabled = false;
   }
 }
 
@@ -405,33 +484,95 @@ function renderReview(summary) {
 
   const header = document.createElement("p");
   header.className = "lead";
-  header.textContent = `${summary.display_count} display(s) ready to migrate.`;
+  header.textContent = `${summary.display_count} display(s) ready to migrate. Edit names below before continuing.`;
   root.appendChild(header);
 
+  const jobName = document.createElement("label");
+  jobName.className = "context-field rename-field";
+  jobName.innerHTML = `
+    <span>Job / scenario name</span>
+    <input type="text" id="rename-scenario-name" value="${escapeHtml(summary.name || "")}" placeholder="Migration job name">
+  `;
+  root.appendChild(jobName);
+
+  const warnings = summary.intake_warnings || [];
+  if (warnings.length) {
+    const warn = document.createElement("div");
+    warn.className = "result-box error";
+    warn.innerHTML = `<strong>Accuracy checks (${warnings.length})</strong><ul>${warnings
+      .map((w) => `<li>${escapeHtml(w)}</li>`)
+      .join("")}</ul>`;
+    root.appendChild(warn);
+  }
+
   for (const d of summary.displays || []) {
+    const idx = d.index ?? 0;
     const card = document.createElement("div");
     card.className = "display-card";
+    card.dataset.displayIndex = String(idx);
+    const pens = d.canvas_pen_count || 0;
     card.innerHTML = `
-      <h3>${escapeHtml(d.name)}</h3>
+      <label class="context-field rename-field">
+        <span>Display / dashboard name</span>
+        <input type="text" data-rename="display-name" data-display-index="${idx}" value="${escapeHtml(d.name || "")}" placeholder="Dashboard name in IDMP">
+      </label>
       <div class="display-meta">
         <span class="meta-chip">Element ${d.element_id}</span>
         <span class="meta-chip">${d.dashboard_id ? `Dashboard ${d.dashboard_id}` : "New dashboard"}</span>
         <span class="meta-chip">${escapeHtml(d.dashboard_type || "grid")}</span>
         <span class="meta-chip">${d.panel_count} panel(s)</span>
-        ${d.has_canvas_plan ? `<span class="meta-chip">${d.canvas_equipment_count} equipment · ${d.canvas_flow_count} flows</span>` : ""}
-        ${d.has_screenshot ? '<span class="meta-chip">Screenshot attached</span>' : ""}
+        ${d.has_canvas_plan ? `<span class="meta-chip">${d.canvas_equipment_count || 0} equipment · ${d.canvas_flow_count || 0} flows${pens ? ` · ${pens} pens` : ""}</span>` : ""}
+        ${d.has_screenshot ? '<span class="meta-chip">Screenshot attached</span>' : '<span class="meta-chip">No screenshot</span>'}
       </div>
-      <div class="panel-tags">
+      <div class="panel-rename-list">
         ${(d.panels || [])
           .map(
-            (p) =>
-              `<span class="tag" title="${escapeHtml((p.pi_tags || []).join(", "))}">${escapeHtml(p.title)} (${escapeHtml(p.type)})</span>`,
+            (p) => `
+          <label class="context-field rename-field panel-rename">
+            <span>Panel <code>${escapeHtml(p.key || "")}</code> · ${escapeHtml(p.type || "")}${(p.pi_tags || []).length ? "" : " · no tags"}</span>
+            <input type="text" data-rename="panel-title" data-display-index="${idx}" data-panel-key="${escapeHtml(p.key || "")}" value="${escapeHtml(p.title || "")}" placeholder="Panel title">
+          </label>`,
           )
           .join("")}
       </div>
     `;
     root.appendChild(card);
   }
+}
+
+function collectRenamePayload() {
+  const displaysByIndex = new Map();
+  document.querySelectorAll("[data-rename='display-name']").forEach((el) => {
+    const index = Number(el.dataset.displayIndex);
+    if (!Number.isInteger(index)) return;
+    if (!displaysByIndex.has(index)) displaysByIndex.set(index, { index, panels: [] });
+    displaysByIndex.get(index).name = el.value.trim();
+  });
+  document.querySelectorAll("[data-rename='panel-title']").forEach((el) => {
+    const index = Number(el.dataset.displayIndex);
+    const key = el.dataset.panelKey;
+    if (!Number.isInteger(index) || !key) return;
+    if (!displaysByIndex.has(index)) displaysByIndex.set(index, { index, panels: [] });
+    displaysByIndex.get(index).panels.push({ key, title: el.value.trim() });
+  });
+  const nameEl = $("rename-scenario-name");
+  return {
+    name: nameEl ? nameEl.value.trim() : undefined,
+    displays: Array.from(displaysByIndex.values()),
+  };
+}
+
+async function saveReviewNames() {
+  if (!state.jobId) return state.summary;
+  const payload = collectRenamePayload();
+  const data = await api(`/api/jobs/${state.jobId}/rename`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  state.summary = data.summary;
+  $("job-badge").textContent = `${data.summary.display_count} display(s) · ${totalPanels(data.summary)} panel(s) ready`;
+  return data.summary;
 }
 
 async function loadTypeMap() {
@@ -724,12 +865,19 @@ function renderMigrationResults(data, idmpUrl) {
 function setupDropzone() {
   const zone = $("dropzone");
   const input = $("file-input");
+  if (!zone || !input) return;
 
-  zone.addEventListener("click", () => input.click());
+  const openPicker = () => {
+    // Always clear so choosing the same file again triggers change
+    input.value = "";
+    input.click();
+  };
+
+  zone.addEventListener("click", openPicker);
   zone.addEventListener("keydown", (e) => {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
-      input.click();
+      openPicker();
     }
   });
   input.addEventListener("change", () => {
@@ -757,8 +905,10 @@ function bindEvents() {
   });
   document.querySelectorAll(".stepper .step").forEach((step) => {
     step.addEventListener("click", () => {
+      if (state.running) return;
       const target = Number(step.dataset.step);
-      if (target < state.step) setStep(target);
+      // Allow jumping back to Source anytime to re-upload
+      if (target <= state.step || (target === 2 && state.connected)) setStep(target);
     });
   });
   $("btn-step1-next").addEventListener("click", () => {
@@ -766,11 +916,23 @@ function bindEvents() {
     setStep(2);
   });
   $("btn-step2-back").addEventListener("click", () => setStep(1));
+  if ($("btn-clear-source")) {
+    $("btn-clear-source").addEventListener("click", () => {
+      resetSourceState();
+      showToast("Source cleared — upload zip or files again.", "ok");
+      setStep(2);
+    });
+  }
   $("btn-step3-back").addEventListener("click", () => setStep(2));
-  $("btn-step3-next").addEventListener("click", () => {
-    if (state.summary) renderContextStep(state.summary);
-    $("prompt-context").value = state.promptContext;
-    setStep(4);
+  $("btn-step3-next").addEventListener("click", async () => {
+    try {
+      const summary = await saveReviewNames();
+      if (summary) renderContextStep(summary);
+      $("prompt-context").value = state.promptContext;
+      setStep(4);
+    } catch (err) {
+      showToast(err.message || "Could not save names", "error");
+    }
   });
   $("btn-step4-back").addEventListener("click", () => setStep(3));
   $("btn-step4-next").addEventListener("click", () => {
@@ -783,13 +945,21 @@ function bindEvents() {
     if (!state.running) setStep(4);
   });
   $("btn-run-migration").addEventListener("click", runMigration);
+  if ($("btn-ingest-files")) {
+    $("btn-ingest-files").addEventListener("click", ingestFiles);
+  }
+  // Re-pick individual files without stuck input cache
+  ["file-tags", "file-display", "file-screenshot"].forEach((id) => {
+    const el = $(id);
+    if (!el) return;
+    el.addEventListener("click", () => {
+      el.value = "";
+    });
+  });
   $("btn-start-over").addEventListener("click", () => {
     if ((state.jobId || state.summary) && !window.confirm("Clear this migration plan and start over?")) return;
-    state.jobId = null;
-    state.summary = null;
     state.promptContext = "";
-    state.panelPrompts = {};
-    $("ingest-status").classList.add("hidden");
+    resetSourceState();
     $("migrate-results").innerHTML = "";
     if ($("qa-results")) $("qa-results").innerHTML = "";
     $("migrate-progress").classList.add("hidden");
@@ -798,7 +968,6 @@ function bindEvents() {
     $("btn-run-migration").classList.remove("hidden");
     $("btn-run-migration").textContent = "Publish dashboards";
     $("publish-status").textContent = "Ready";
-    $("job-badge").classList.add("hidden");
     setStep(1);
   });
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Agentic PI Migration Upgrade — quick launcher for Summit Creek oil scenario
+# Agentic PI Migration Upgrade — CLI launcher (standalone)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"

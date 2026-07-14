@@ -215,19 +215,66 @@ def ingest_folder(folder: Path) -> dict[str, Any]:
         for sub in subdirs:
             if any((sub / n).exists() for n in TAG_FILES):
                 displays.append(_load_display_folder(sub))
-    if not displays and any((folder / n).exists() for n in TAG_FILES):
-        displays.append(_load_display_folder(folder))
-    else:
-        raise FileNotFoundError(
-            f"No display subfolders with tags.csv/tags.json found under {folder}"
-        )
+    if not displays:
+        if any((folder / n).exists() for n in TAG_FILES):
+            displays.append(_load_display_folder(folder))
+        else:
+            raise FileNotFoundError(
+                f"No display folders with tags.csv/tags.json found under {folder}. "
+                "Add tags.csv (required) plus optional screenshot.* and display.json."
+            )
 
-    return {
+    scenario = {
         "name": folder.name,
         "description": f"Agentic PI Migration Upgrade intake from {folder.name}",
         "source_folder": str(folder),
         "displays": displays,
     }
+    scenario["intake_warnings"] = validate_scenario(scenario)
+    return scenario
+
+
+def validate_scenario(scenario: dict[str, Any]) -> list[str]:
+    """Accuracy checks — warnings for missing pieces that hurt fidelity."""
+    warnings: list[str] = []
+    displays = scenario.get("displays") or []
+    if not displays:
+        warnings.append("No displays found in intake.")
+        return warnings
+    for display in displays:
+        name = display.get("name") or "display"
+        panels = display.get("panels") or []
+        if not panels:
+            warnings.append(f"{name}: no panels in tags.csv")
+        for panel in panels:
+            tags = panel.get("pi_tags") or []
+            ptype = str(panel.get("type") or "").lower()
+            if ptype not in ("process", "p&id", "pid", "pnid", "text") and not tags:
+                warnings.append(
+                    f"{name}/{panel.get('key')}: chart panel has no pi_tags — "
+                    "bind historian attributes for accurate live charts"
+                )
+            if not panel.get("element_id"):
+                warnings.append(f"{name}/{panel.get('key')}: missing element_id")
+        dtype = str(display.get("dashboard_type") or "grid").lower()
+        if dtype == "canvas":
+            canvas = display.get("canvas") or {}
+            pens = canvas.get("pens") or canvas.get("equipment") or []
+            if not pens and not canvas.get("flows"):
+                warnings.append(
+                    f"{name}: canvas dashboard without pens/equipment in display.json — "
+                    "layout accuracy will be limited"
+                )
+            if not display.get("reference_screenshot"):
+                warnings.append(f"{name}: no screenshot — recommended for Canvas verification")
+        if not display.get("element_id"):
+            warnings.append(f"{name}: missing root element_id")
+        tf, tt = display.get("time_from"), display.get("time_to")
+        if tf and not str(tf).startswith("now"):
+            warnings.append(f"{name}: time_from={tf} is absolute — prefer now-* for live demos")
+        if tt and str(tt) not in ("now", "now+0s") and not str(tt).startswith("now"):
+            warnings.append(f"{name}: time_to={tt} is not relative 'now'")
+    return warnings
 
 
 def write_scenario(folder: Path, output: Path) -> dict[str, Any]:

@@ -1,3 +1,0 @@
-panel_key,title,type,element_id,pi_tags,prompt
-product_flows,Flow Control Valve Readings,trend,2026702359773696,54FY026A.PV|54FY026B.PV|54FY026C.PV,multi-series trend for FC-010 FC-011 FC-012 like PI Vision top-right chart
-feed_flow,Feed Flow,trend,2026702359773696,52FC001.SV|52FC001.PV,scheduled vs actual feed flow trend along the bottom clear lane
