@@ -1,6 +1,6 @@
-# Agentic PI Migration Upgrade
+# Agentic Visualization Migration Upgrade
 
-**Product:** Agentic PI Migration Upgrade  
+**Product:** Agentic Visualization Migration Upgrade  
 **Vendor:** TDengine  
 **Audience:** Internal engineering, solutions, and customer-success teams  
 **Status:** Ready for internal delivery  
